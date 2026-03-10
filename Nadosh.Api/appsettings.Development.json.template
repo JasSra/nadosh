@@ -1,0 +1,19 @@
+# Development Settings Template
+# Copy this to appsettings.Development.json and update with your values
+
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Debug",
+      "Microsoft.AspNetCore": "Information"
+    }
+  },
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5439;Database=nadosh;Username=nadosh;Password=YOUR_PASSWORD_HERE",
+    "Redis": "localhost:6389,abortConnect=false"
+  },
+  "ApiAuth": {
+    "ApiKey": "YOUR_API_KEY_HERE"
+  },
+  "AllowedHosts": "*"
+}

@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nadosh - Network Discovery & Exposure Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .glass { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
+        .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        /* Fix infinite scroll issues */
+        html, body { height: 100%; overflow-x: hidden; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen" x-data="nadoshApp()" x-init="init()">
+    
+    <!-- Header -->
+    <header class="gradient-bg shadow-lg">
+        <div class="container mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 bg-white rounded-lg flex items-center justify-center">
+                        <span class="text-2xl font-bold text-purple-600">N</span>
+                    </div>
+                    <div>
+                        <h1 class="text-3xl font-bold text-white">Nadosh</h1>
+                        <p class="text-purple-200 text-sm">Network Discovery & Exposure Platform</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="glass px-4 py-2 rounded-lg">
+                        <div class="flex items-center space-x-2">
+                            <span class="pulse-dot w-2 h-2 bg-green-400 rounded-full"></span>
+                            <span class="text-white text-sm">Live</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-white font-semibold" x-text="stats.totalHosts"></div>
+                        <div class="text-purple-200 text-xs">Hosts Tracked</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="container mx-auto px-4 py-8">
+        
+        <!-- Stats Dashboard -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-purple-500 transition-colors">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm">Open Ports</p>
+                        <p class="text-3xl font-bold text-white mt-2" x-text="stats.totalOpenPorts"></p>
+                    </div>
+                    <div class="w-12 h-12 bg-blue-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-red-500 transition-colors">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm">High Severity</p>
+                        <p class="text-3xl font-bold text-red-400 mt-2" x-text="stats.highSeverityCount"></p>
+                    </div>
+                    <div class="w-12 h-12 bg-red-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-green-500 transition-colors">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm">Scan Coverage</p>
+                        <p class="text-3xl font-bold text-green-400 mt-2" x-text="stats.scanCoverage"></p>
+                    </div>
+                    <div class="w-12 h-12 bg-green-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-yellow-500 transition-colors">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm">Changes (24h)</p>
+                        <p class="text-3xl font-bold text-yellow-400 mt-2" x-text="recentChanges.length"></p>
+                    </div>
+                    <div class="w-12 h-12 bg-yellow-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query Builder & Results -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            
+            <!-- Sidebar -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Quick Actions -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <h2 class="text-xl font-bold text-white mb-4">Quick Actions</h2>
+                    <div class="space-y-2">
+                        <button @click="currentView = 'search'; queryDsl = 'state:open'; searchExposures()" 
+                                class="w-full bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            🔍 View All Open Ports
+                        </button>
+                        <button @click="currentView = 'hosts'; loadHosts()" 
+                                class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            🖥️ View All Hosts
+                        </button>
+                        <button @click="currentView = 'search'; queryDsl = 'service:ssh AND state:open'; searchExposures()" 
+                                class="w-full bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            SSH Services
+                        </button>
+                        <button @click="currentView = 'search'; queryDsl = 'severity:high'; searchExposures()" 
+                                class="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            High Severity
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Top Services -->
+                <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <h3 class="text-lg font-bold text-white mb-4">Top Services</h3>
+                    <div class="space-y-3 max-h-64 overflow-y-auto">
+                        <template x-for="service in stats.topServices?.slice(0, 8)" :key="service.service">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-2">
+                                    <div class="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                    <span class="text-gray-300 text-sm" x-text="service.service"></span>
+                                </div>
+                                <span class="text-gray-400 text-sm font-mono" x-text="service.count"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content Area -->
+            <div class="lg:col-span-2">
+                <!-- Hosts View -->
+                <div x-show="currentView === 'hosts'" class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold text-white">Active Hosts</h2>
+                        <div class="text-gray-400 text-sm">
+                            <span x-text="hosts.filter(h => h.openPortCount > 0).length"></span> hosts with open ports
+                        </div>
+                    </div>
+                    
+                    <div class="space-y-3 max-h-[600px] overflow-y-auto">
+                        <template x-for="host in hosts.filter(h => h.openPortCount > 0)" :key="host.ip">
+                            <div class="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:border-purple-500 transition-colors cursor-pointer"
+                                 @click="viewTimeline(host.ip)">
+                                <div class="flex items-start justify-between mb-2">
+                                    <div class="flex-1">
+                                        <div class="flex items-center space-x-3 mb-2">
+                                            <span class="text-white font-mono font-semibold text-lg" x-text="host.ip"></span>
+                                            <span class="bg-green-500 px-2 py-1 rounded text-xs text-white" x-text="host.openPortCount + ' ports'"></span>
+                                        </div>
+                                        <div class="flex items-center space-x-4 text-sm text-gray-400">
+                                            <span x-show="host.country" x-text="'📍 ' + host.city + ', ' + host.country"></span>
+                                            <span x-show="host.asnOrganization" x-text="'🏢 ' + host.asnOrganization"></span>
+                                        </div>
+                                    </div>
+                                    <div class="text-right text-xs text-gray-500">
+                                        <div x-text="'Last seen: ' + new Date(host.lastSeen).toLocaleString()"></div>
+                                    </div>
+                                </div>
+                                <div class="flex flex-wrap gap-2 mt-3">
+                                    <template x-for="port in host.topPorts?.slice(0, 6)" :key="port">
+                                        <span class="bg-gray-700 text-purple-400 text-xs px-2 py-1 rounded font-mono" x-text="port"></span>
+                                    </template>
+                                    <span x-show="host.openPortCount > 6" class="text-gray-500 text-xs px-2 py-1">
+                                        +<span x-text="host.openPortCount - 6"></span> more
+                                    </span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Search Results -->
+                <div x-show="currentView === 'search'" class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold text-white">Search Results</h2>
+                        <div class="flex items-center space-x-3">
+                            <input type="text" 
+                                   x-model="queryDsl" 
+                                   @keyup.enter="searchExposures()"
+                                   placeholder="service:ssh AND port:22" 
+                                   class="bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white text-sm focus:border-purple-500 focus:outline-none w-64">
+                            <button @click="searchExposures()" 
+                                    class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors">
+                                Search
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div x-show="searchResults.length > 0" class="mb-3 text-gray-400 text-sm">
+                        Found <span class="text-white font-semibold" x-text="totalCount"></span> results
+                    </div>
+
+                    <div class="space-y-3 max-h-[600px] overflow-y-auto">
+                        <template x-for="result in searchResults.slice(0, 50)" :key="result.id">
+                            <div class="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:border-purple-500 transition-colors cursor-pointer"
+                                 @click="viewTimeline(result.targetId)">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex-1">
+                                        <div class="flex items-center space-x-3 mb-2">
+                                            <span class="text-white font-mono font-semibold" x-text="result.targetId"></span>
+                                            <span class="text-gray-400 text-sm">:</span>
+                                            <span class="text-purple-400 font-mono" x-text="result.port"></span>
+                                            <span :class="{
+                                                'bg-green-500': result.currentState === 'open',
+                                                'bg-red-500': result.currentState === 'closed',
+                                                'bg-gray-500': result.currentState === 'filtered'
+                                            }" class="px-2 py-1 rounded text-xs text-white" x-text="result.currentState"></span>
+                                        </div>
+                                        <div class="flex items-center space-x-4 text-sm">
+                                            <span class="text-gray-400">
+                                                <span class="text-gray-500">Service:</span> 
+                                                <span class="text-blue-400" x-text="result.classification || 'unknown'"></span>
+                                            </span>
+                                            <span :class="{
+                                                'text-red-400': result.severity === 'high',
+                                                'text-yellow-400': result.severity === 'medium',
+                                                'text-green-400': result.severity === 'low'
+                                            }" x-text="result.severity"></span>
+                                        </div>
+                                    </div>
+                                    <div class="text-right text-xs text-gray-500">
+                                        <div x-text="new Date(result.lastSeen).toLocaleString()"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline & Changes -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            <!-- IP Timeline Viewer -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-white">IP Timeline</h2>
+                    <button @click="timelineIp = ''; timeline = null" 
+                            x-show="timeline" 
+                            class="text-gray-400 hover:text-white text-sm">
+                        Clear
+                    </button>
+                </div>
+
+                <div x-show="!timeline" class="text-center py-12">
+                    <div class="mb-4">
+                        <input type="text" 
+                               x-model="timelineIp" 
+                               @keyup.enter="loadTimeline()"
+                               placeholder="Enter IP address (e.g., 192.168.4.25)" 
+                               class="bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-purple-500 focus:outline-none w-full max-w-md">
+                    </div>
+                    <button @click="loadTimeline()" 
+                            class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg transition-colors">
+                        Load Timeline
+                    </button>
+                </div>
+
+                <div x-show="timeline" x-cloak class="space-y-4">
+                    <div class="bg-gray-900 rounded-lg p-4">
+                        <div class="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <span class="text-gray-400">IP:</span> 
+                                <span class="text-white font-mono" x-text="timeline?.ip"></span>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Observations:</span> 
+                                <span class="text-white" x-text="timeline?.summary.totalObservations"></span>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">First Seen:</span> 
+                                <span class="text-white" x-text="timeline?.summary.firstSeen ? new Date(timeline.summary.firstSeen).toLocaleString() : ''"></span>
+                            </div>
+                            <div>
+                                <span class="text-gray-400">Last Seen:</span> 
+                                <span class="text-white" x-text="timeline?.summary.lastSeen ? new Date(timeline.summary.lastSeen).toLocaleString() : ''"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="max-h-96 overflow-y-auto space-y-2">
+                        <template x-for="(event, index) in timeline?.timeline.slice(0, 30)" :key="index">
+                            <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex-1">
+                                        <div class="flex items-center space-x-2 mb-1">
+                                            <span class="text-purple-400 font-mono" x-text="event.port"></span>
+                                            <span class="text-gray-400 text-xs" x-text="event.serviceName"></span>
+                                            <span x-show="event.isFirstSeen" class="bg-green-600 text-white text-xs px-2 py-0.5 rounded">NEW</span>
+                                        </div>
+                                        <div x-show="event.changes.length > 0" class="flex flex-wrap gap-1 mt-1">
+                                            <template x-for="change in event.changes" :key="change">
+                                                <span class="bg-yellow-600 text-white text-xs px-2 py-0.5 rounded" x-text="change"></span>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="text-xs text-gray-500" x-text="new Date(event.observedAt).toLocaleString()"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Changes -->
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-white">Recent Changes</h2>
+                    <button @click="loadRecentChanges()" class="text-gray-400 hover:text-white text-sm">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="max-h-96 overflow-y-auto space-y-2">
+                    <template x-for="change in recentChanges.slice(0, 30)" :key="change.ip + change.port + change.detectedAt">
+                        <div class="bg-gray-900 border border-gray-700 rounded p-3 hover:border-yellow-500 transition-colors cursor-pointer"
+                             @click="viewTimeline(change.ip)">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-1">
+                                        <span class="text-white font-mono text-sm" x-text="change.ip"></span>
+                                        <span class="text-gray-400">:</span>
+                                        <span class="text-purple-400 font-mono text-sm" x-text="change.port"></span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-1 mt-1">
+                                        <template x-for="changeType in change.changes" :key="changeType">
+                                            <span class="text-xs px-2 py-0.5 rounded"
+                                                  :class="{
+                                                      'bg-yellow-600 text-white': changeType.startsWith('VERSION'),
+                                                      'bg-blue-600 text-white': changeType.startsWith('SERVICE'),
+                                                      'bg-green-600 text-white': changeType.startsWith('STATE'),
+                                                      'bg-purple-600 text-white': changeType.startsWith('BANNER')
+                                                  }"
+                                                  x-text="changeType"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-500" x-text="new Date(change.detectedAt).toLocaleString()"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8 mb-8">
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <h3 class="text-lg font-bold text-white mb-4">Top Ports</h3>
+                <div class="relative h-64">
+                    <canvas id="portsChart"></canvas>
+                </div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <h3 class="text-lg font-bold text-white mb-4">Severity Distribution</h3>
+                <div class="relative h-64">
+                    <canvas id="severityChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000';
+        const API_KEY = 'dev-api-key-123';
+
+        function nadoshApp() {
+            return {
+                stats: {
+                    totalHosts: 0,
+                    totalOpenPorts: 0,
+                    scanCoverage: 0,
+                    topServices: [],
+                    topPorts: [],
+                    highSeverityCount: 0
+                },
+                currentView: 'hosts',
+                hosts: [],
+                queryDsl: 'state:open',
+                searchResults: [],
+                totalCount: 0,
+                loading: false,
+                timelineIp: '',
+                timeline: null,
+                recentChanges: [],
+                portsChart: null,
+                severityChart: null,
+
+                async init() {
+                    await this.loadStats();
+                    await this.loadHosts();
+                    await this.loadRecentChanges();
+                    this.initCharts();
+                    
+                    // Auto-refresh every 60 seconds (reduced from 30)
+                    setInterval(async () => {
+                        await this.loadStats();
+                        if (this.currentView === 'hosts') {
+                            await this.loadHosts();
+                        }
+                    }, 60000);
+                },
+
+                async loadHosts() {
+                    try {
+                        const response = await fetch(`${API_URL}/v1/targets?skip=0&take=100`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        const data = await response.json();
+                        // API returns { TotalCount, Results }
+                        this.hosts = data.results || data.Results || [];
+                        
+                        // Enrich with topPorts from observations
+                        await this.enrichHostsWithPorts();
+                    } catch (error) {
+                        console.error('Failed to load hosts:', error);
+                        this.hosts = [];
+                    }
+                },
+
+                async enrichHostsWithPorts() {
+                    for (let host of this.hosts.filter(h => h.openPortCount > 0).slice(0, 20)) {
+                        try {
+                            const response = await fetch(`${API_URL}/v1/exposures/search`, {
+                                method: 'POST',
+                                headers: {
+                                    'X-API-Key': API_KEY,
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ ip: host.ip, pageSize: 10 })
+                            });
+                            const data = await response.json();
+                            const ports = [...new Set((data.results || []).map(r => r.port))];
+                            host.topPorts = ports.slice(0, 8);
+                        } catch (error) {
+                            console.error(`Failed to load ports for ${host.ip}:`, error);
+                            host.topPorts = [];
+                        }
+                    }
+                },
+
+                async loadStats() {
+                    try {
+                        const response = await fetch(`${API_URL}/v1/stats/summary`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        const data = await response.json();
+                        this.stats = data;
+                        
+                        // Update charts
+                        this.updateCharts();
+                    } catch (error) {
+                        console.error('Failed to load stats:', error);
+                    }
+                },
+
+                async searchExposures() {
+                    if (!this.queryDsl.trim()) return;
+                    
+                    this.loading = true;
+                    try {
+                        const response = await fetch(`${API_URL}/v1/exposures/search`, {
+                            method: 'POST',
+                            headers: {
+                                'X-API-Key': API_KEY,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ query: this.queryDsl })
+                        });
+                        const data = await response.json();
+                        this.searchResults = data.results || [];
+                        this.totalCount = data.totalCount || 0;
+                    } catch (error) {
+                        console.error('Search failed:', error);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async loadTimeline() {
+                    if (!this.timelineIp.trim()) return;
+                    
+                    try {
+                        const response = await fetch(`${API_URL}/v1/timeline/${this.timelineIp}`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        this.timeline = await response.json();
+                    } catch (error) {
+                        console.error('Failed to load timeline:', error);
+                    }
+                },
+
+                viewTimeline(ip) {
+                    this.timelineIp = ip;
+                    this.loadTimeline();
+                    // Scroll to timeline section
+                    setTimeout(() => {
+                        document.querySelector('#timeline')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                },
+
+                async loadRecentChanges() {
+                    try {
+                        const response = await fetch(`${API_URL}/v1/timeline/changes?days=1`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        const data = await response.json();
+                        this.recentChanges = data.changes || [];
+                    } catch (error) {
+                        console.error('Failed to load changes:', error);
+                    }
+                },
+
+                initCharts() {
+                    // Ports Chart
+                    const portsCtx = document.getElementById('portsChart');
+                    this.portsChart = new Chart(portsCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                label: 'Count',
+                                data: [],
+                                backgroundColor: 'rgba(147, 51, 234, 0.5)',
+                                borderColor: 'rgba(147, 51, 234, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { 
+                                    ticks: { color: '#9CA3AF' },
+                                    grid: { color: '#374151' }
+                                },
+                                x: { 
+                                    ticks: { color: '#9CA3AF' },
+                                    grid: { color: '#374151' }
+                                }
+                            }
+                        }
+                    });
+
+                    // Severity Chart
+                    const severityCtx = document.getElementById('severityChart');
+                    this.severityChart = new Chart(severityCtx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['High', 'Medium', 'Low'],
+                            datasets: [{
+                                data: [0, 0, 0],
+                                backgroundColor: [
+                                    'rgba(239, 68, 68, 0.5)',
+                                    'rgba(251, 191, 36, 0.5)',
+                                    'rgba(34, 197, 94, 0.5)'
+                                ],
+                                borderColor: [
+                                    'rgba(239, 68, 68, 1)',
+                                    'rgba(251, 191, 36, 1)',
+                                    'rgba(34, 197, 94, 1)'
+                                ],
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    labels: { color: '#9CA3AF' }
+                                }
+                            }
+                        }
+                    });
+                },
+
+                updateCharts() {
+                    if (!this.stats.topPorts || !this.portsChart) return;
+
+                    // Update ports chart
+                    this.portsChart.data.labels = this.stats.topPorts.slice(0, 8).map(p => p.port.toString());
+                    this.portsChart.data.datasets[0].data = this.stats.topPorts.slice(0, 8).map(p => p.count);
+                    this.portsChart.update();
+
+                    // Update severity chart (mock data for now)
+                    this.stats.highSeverityCount = this.stats.topServices?.reduce((sum, s) => sum + s.count, 0) || 0;
+                    this.severityChart.data.datasets[0].data = [
+                        this.stats.highSeverityCount,
+                        Math.floor(this.stats.highSeverityCount * 0.6),
+                        Math.floor(this.stats.highSeverityCount * 0.3)
+                    ];
+                    this.severityChart.update();
+                }
+            }
+        }
+    </script>
+</body>
+</html>

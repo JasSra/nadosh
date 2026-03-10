@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nadosh-postgres
+    environment:
+      POSTGRES_USER: nadosh
+      POSTGRES_PASSWORD: nadosh_password
+      POSTGRES_DB: nadosh
+    ports:
+      - "5439:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nadosh -d nadosh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nadosh-redis
+    ports:
+      - "6389:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: nadosh-otel
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./scripts/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4327:4317"
+      - "4328:4318"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Nadosh.Api/Dockerfile
+    container_name: nadosh-api
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ApiSettings__ApiKey=dev-api-key-123
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Scheduler (single instance with leader election) ──
+  scheduler:
+    build:
+      context: .
+      dockerfile: Nadosh.Workers/Dockerfile
+    container_name: nadosh-scheduler
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - WORKER_ROLE=scheduler
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Discovery Workers (Tier 0) — scalable ──
+  discovery-workers:
+    build:
+      context: .
+      dockerfile: Nadosh.Workers/Dockerfile
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - WORKER_ROLE=discovery,classifier
+      - NADOSH_DISCOVERY_CONCURRENCY=200
+      - NADOSH_DISCOVERY_TIMEOUT_MS=2000
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    deploy:
+      replicas: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Banner + Fingerprint Workers (Tier 1+2) ──
+  deep-workers:
+    build:
+      context: .
+      dockerfile: Nadosh.Workers/Dockerfile
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - WORKER_ROLE=banner,fingerprint,enrichment,cache-projector
+      - NADOSH_BANNER_CONNECT_TIMEOUT_MS=5000
+      - NADOSH_BANNER_READ_TIMEOUT_MS=5000
+      - NADOSH_FINGERPRINT_CONNECT_TIMEOUT_MS=10000
+      - NADOSH_FINGERPRINT_READ_TIMEOUT_MS=10000
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    deploy:
+      replicas: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Enrichment & Change Detection Workers ──
+  enrichment-workers:
+    build:
+      context: .
+      dockerfile: Nadosh.Workers/Dockerfile
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - WORKER_ROLE=geo-enrichment,change-detector
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    deploy:
+      replicas: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
