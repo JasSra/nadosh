@@ -25,6 +25,7 @@ public class TargetRepository : ITargetRepository
         else
         {
             _db.Entry(existing).CurrentValues.SetValues(target);
+            // SetValues does not copy collection properties, so OwnershipTags must be assigned explicitly.
             existing.OwnershipTags = target.OwnershipTags;
         }
 

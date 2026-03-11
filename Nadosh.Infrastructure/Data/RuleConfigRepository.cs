@@ -39,16 +39,20 @@ public class RuleConfigRepository : IRuleConfigRepository
                 r => r.RuleId == ruleConfig.RuleId && r.Version == ruleConfig.Version,
                 cancellationToken);
 
+        bool inserted;
         if (existing is null)
         {
             _db.RuleConfigs.Add(ruleConfig);
+            inserted = true;
         }
         else
         {
             _db.Entry(existing).CurrentValues.SetValues(ruleConfig);
+            inserted = false;
         }
 
         await _db.SaveChangesAsync(cancellationToken);
-        return true;
+        // Returns true when a new rule version was inserted, false when an existing version was updated.
+        return inserted;
     }
 }
