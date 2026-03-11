@@ -52,8 +52,8 @@ public sealed class RuleExecutionService : IRuleExecutionService
             {
                 "tls-cert-check" => await ExecuteTlsRuleAsync(rule, request, matcher, observation, cancellationToken),
                 "http-title-check" => await ExecuteHttpRuleAsync(rule, request, matcher, observation, cancellationToken),
-                "ssh-banner-check" => ExecuteSshFallback(rule, matcher, observation),
-                "rdp-presence-check" => ExecuteRdpFallback(rule, matcher, observation),
+                "ssh-banner-check" => await ExecuteSshRuleAsync(rule, matcher, observation, cancellationToken),
+                "rdp-presence-check" => await ExecuteRdpRuleAsync(rule, matcher, observation, cancellationToken),
                 _ => ExecuteGenericFallback(rule, matcher, observation)
             };
         }
@@ -198,46 +198,168 @@ public sealed class RuleExecutionService : IRuleExecutionService
         };
     }
 
-    private RuleExecutionOutcome ExecuteSshFallback(RuleConfig rule, RuleMatcherDefinition matcher, Observation observation)
+    private async Task<RuleExecutionOutcome> ExecuteSshRuleAsync(
+        RuleConfig rule,
+        RuleMatcherDefinition matcher,
+        Observation observation,
+        CancellationToken cancellationToken)
     {
+        string? liveBanner = null;
+        string? liveVersion = null;
+
+        try
+        {
+            using var tcpClient = new TcpClient();
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(_connectTimeoutMs);
+
+            await tcpClient.ConnectAsync(observation.TargetId, observation.Port, connectCts.Token);
+
+            using var stream = tcpClient.GetStream();
+            stream.ReadTimeout = _readTimeoutMs;
+
+            // Read the SSH server identification string (ends with \r\n or \n)
+            // RFC 4253 §4.2 limits SSH identification strings to 255 chars + CR+LF;
+            // we allow up to 512 bytes as a defensive upper bound for non-compliant servers.
+            const int MaxSshBannerBytes = 512;
+            var sb = new System.Text.StringBuilder();
+            var buf = new byte[1];
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readCts.CancelAfter(_readTimeoutMs);
+
+            while (true)
+            {
+                var n = await stream.ReadAsync(buf.AsMemory(0, 1), readCts.Token);
+                if (n == 0) break;
+                var ch = (char)buf[0];
+                if (ch == '\n') break;
+                if (ch != '\r') sb.Append(ch);
+                if (sb.Length > MaxSshBannerBytes) break;
+            }
+
+            liveBanner = sb.ToString().Trim();
+
+            // Parse version: SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.14 → OpenSSH_9.6p1 Ubuntu-3ubuntu13.14
+            if (liveBanner.StartsWith("SSH-", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = liveBanner.Split('-', 3);
+                if (parts.Length >= 3)
+                    liveVersion = parts[2];
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live SSH probe failed for {TargetIp}:{Port}, falling back to observation data.",
+                observation.TargetId, observation.Port);
+        }
+
+        // Merge live data with observation fallback
+        var banner = liveBanner ?? observation.Banner;
+        var version = liveVersion ?? observation.ServiceVersion;
+        var isLive = liveBanner != null;
+
         var severity = ResolveSeverity(rule.SeverityMappingJson, "default");
         var evidence = FilterEvidence(new Dictionary<string, object?>
         {
-            ["banner"] = observation.Banner,
-            ["version"] = observation.ServiceVersion,
-            ["service"] = observation.ServiceName
+            ["banner"] = banner,
+            ["version"] = version,
+            ["service"] = observation.ServiceName,
+            ["liveProbe"] = isLive
         }, matcher.Collect);
 
         return new RuleExecutionOutcome
         {
             ResultStatus = "success",
-            Confidence = string.IsNullOrWhiteSpace(observation.Banner) ? 0.5 : 0.85,
-            Summary = $"SSH evidence reused from prior observation for {observation.TargetId}:{observation.Port}.",
+            Confidence = isLive ? 0.97 : (string.IsNullOrWhiteSpace(banner) ? 0.5 : 0.85),
+            Summary = isLive
+                ? $"SSH banner collected live for {observation.TargetId}:{observation.Port} (version: {version ?? "unknown"})."
+                : $"SSH evidence reused from prior observation for {observation.TargetId}:{observation.Port}.",
             EvidenceJson = JsonSerializer.Serialize(evidence),
-            Tags = ["enriched", "ssh", "observation-fallback"],
+            Tags = ["enriched", "ssh", isLive ? "live-probe" : "observation-fallback"],
             Severity = severity
         };
     }
 
-    private RuleExecutionOutcome ExecuteRdpFallback(RuleConfig rule, RuleMatcherDefinition matcher, Observation observation)
+    private async Task<RuleExecutionOutcome> ExecuteRdpRuleAsync(
+        RuleConfig rule,
+        RuleMatcherDefinition matcher,
+        Observation observation,
+        CancellationToken cancellationToken)
     {
-        var severity = ResolveSeverity(rule.SeverityMappingJson, "default");
+        var isOpen = false;
+        string? rdpCookie = null;
+
+        try
+        {
+            using var tcpClient = new TcpClient();
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(_connectTimeoutMs);
+
+            await tcpClient.ConnectAsync(observation.TargetId, observation.Port, connectCts.Token);
+            isOpen = true;
+
+            // Send an RDP Connection Request (X.224 TPDU CR) to get a response
+            // Standard RDP initial TPDU: 0300 0013 0e e0 0000 0000 00 cookie
+            var rdpProbe = new byte[]
+            {
+                0x03, 0x00, 0x00, 0x13, // TPKT header: version=3, reserved=0, length=19
+                0x0e,                   // X.224: TPDU length=14
+                0xe0,                   // X.224: CR TPDU type
+                0x00, 0x00,             // DST-REF
+                0x00, 0x00,             // SRC-REF
+                0x00,                   // CLASS
+                0x43, 0x6f, 0x6f, 0x6b, 0x69, 0x65, 0x3a, 0x20 // "Cookie: "
+            };
+
+            using var stream = tcpClient.GetStream();
+            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            writeCts.CancelAfter(_readTimeoutMs);
+
+            await stream.WriteAsync(rdpProbe, writeCts.Token);
+
+            var responseBuffer = new byte[256];
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readCts.CancelAfter(_readTimeoutMs);
+
+            var bytesRead = await stream.ReadAsync(responseBuffer.AsMemory(0, responseBuffer.Length), readCts.Token);
+            if (bytesRead >= 4 && responseBuffer[0] == 0x03 && responseBuffer[1] == 0x00)
+            {
+                rdpCookie = $"TPKT_CC_len={responseBuffer[2] << 8 | responseBuffer[3]}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live RDP probe for {TargetIp}:{Port} result: open={IsOpen}",
+                observation.TargetId, observation.Port, isOpen);
+        }
+
+        // If live probe failed to connect, fall back to observation state
+        if (!isOpen)
+        {
+            isOpen = observation.State == "open";
+        }
+
+        var severity = ResolveSeverity(rule.SeverityMappingJson, isOpen ? "present" : "absent", "default");
         var evidence = FilterEvidence(new Dictionary<string, object?>
         {
             ["service"] = observation.ServiceName,
-            ["state"] = observation.State,
-            ["port"] = observation.Port
+            ["state"] = isOpen ? "open" : "closed",
+            ["port"] = observation.Port,
+            ["rdpResponse"] = rdpCookie,
+            ["liveProbe"] = rdpCookie != null
         }, matcher.Collect);
 
         return new RuleExecutionOutcome
         {
-            ResultStatus = observation.State == "open" ? "success" : "no-data",
-            Confidence = observation.State == "open" ? 0.8 : 0.3,
-            Summary = observation.State == "open"
-                ? $"RDP presence confirmed from source observation for {observation.TargetId}:{observation.Port}."
-                : $"RDP presence could not be confirmed for {observation.TargetId}:{observation.Port}.",
+            ResultStatus = isOpen ? "success" : "no-data",
+            Confidence = rdpCookie != null ? 0.98 : (isOpen ? 0.80 : 0.30),
+            Summary = rdpCookie != null
+                ? $"RDP presence confirmed via live TPKT handshake for {observation.TargetId}:{observation.Port}."
+                : isOpen
+                    ? $"RDP port open at {observation.TargetId}:{observation.Port} (no TPKT response)."
+                    : $"RDP presence could not be confirmed for {observation.TargetId}:{observation.Port}.",
             EvidenceJson = JsonSerializer.Serialize(evidence),
-            Tags = ["enriched", "rdp", "observation-fallback"],
+            Tags = ["enriched", "rdp", rdpCookie != null ? "tpkt-response" : isOpen ? "port-open" : "no-response"],
             Severity = severity
         };
     }

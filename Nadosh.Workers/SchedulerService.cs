@@ -99,6 +99,11 @@ public class SchedulerService : BackgroundService
 
         var now = DateTime.UtcNow;
 
+        // Load active suppression rules once for this scheduling cycle
+        var suppressionRules = await db.SuppressionRules
+            .Where(s => !s.ExpiryDate.HasValue || s.ExpiryDate > now)
+            .ToListAsync(ct);
+
         // Fetch targets that are due for scanning
         var dueTargets = await db.Targets
             .Where(t => t.Monitored && (!t.NextScheduled.HasValue || t.NextScheduled <= now))
@@ -117,6 +122,13 @@ public class SchedulerService : BackgroundService
 
         foreach (var target in dueTargets)
         {
+            // Check suppression rules before scheduling
+            if (IsSuppressed(target.Ip, suppressionRules))
+            {
+                _logger.LogInformation("Skipping suppressed target {TargetIp}", target.Ip);
+                continue;
+            }
+
             // 1. Score the target and determine cadence
             UpdateInterestScore(target);
             target.Cadence = ComputeCadence(target);
@@ -173,6 +185,69 @@ public class SchedulerService : BackgroundService
         _logger.LogInformation("Scheduled {Count} targets in batch {BatchId} (ports via {Strategy})",
             dueTargets.Count, batchId, portStrategy.Name);
     }
+
+    /// <summary>
+    /// Returns true if the target IP matches any active suppression rule.
+    /// Supports exact IP match and CIDR range matching using integer arithmetic.
+    /// </summary>
+    private static bool IsSuppressed(string targetIp, List<Nadosh.Core.Models.SuppressionRule> rules)
+    {
+        foreach (var rule in rules)
+        {
+            if (!string.IsNullOrEmpty(rule.TargetIp) && rule.TargetIp == targetIp)
+                return true;
+
+            if (!string.IsNullOrEmpty(rule.Cidr) && IsIpInCidr(targetIp, rule.Cidr))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Tests whether an IPv4 address falls within a CIDR range (e.g., "10.0.0.0/8").
+    /// Returns false for any malformed input rather than throwing.
+    /// </summary>
+    private static bool IsIpInCidr(string ipAddress, string cidr)
+    {
+        try
+        {
+            var slashIndex = cidr.IndexOf('/');
+            if (slashIndex < 0)
+            {
+                // No prefix length — treat as a host address exact match
+                return System.Net.IPAddress.TryParse(cidr, out var cidrHost)
+                    && System.Net.IPAddress.TryParse(ipAddress, out var targetHost)
+                    && cidrHost.Equals(targetHost);
+            }
+
+            var networkPart = cidr[..slashIndex];
+            if (!int.TryParse(cidr[(slashIndex + 1)..], out var prefixLength)
+                || prefixLength < 0 || prefixLength > 32)
+                return false;
+
+            if (!System.Net.IPAddress.TryParse(networkPart, out var networkAddress)
+                || networkAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return false;
+
+            if (!System.Net.IPAddress.TryParse(ipAddress, out var targetAddress)
+                || targetAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return false;
+
+            var mask = prefixLength == 0 ? 0u : ~((1u << (32 - prefixLength)) - 1u);
+            var networkInt = IpToUint(networkAddress.GetAddressBytes());
+            var targetInt = IpToUint(targetAddress.GetAddressBytes());
+
+            return (networkInt & mask) == (targetInt & mask);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static uint IpToUint(byte[] bytes)
+        => (uint)((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
 
     /// <summary>
     /// Computes a 0–100 interest score based on how "alive" and "changing" a target is.

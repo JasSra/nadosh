@@ -86,4 +86,8 @@ app.UseStaticFiles();
 app.MapControllers();
 app.UseHttpsRedirection();
 app.MapHealthChecks("/health/ready");
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false // Liveness: no dependency checks, just process-alive
+});
 app.Run();
