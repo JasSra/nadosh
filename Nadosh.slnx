@@ -2,5 +2,6 @@
   <Project Path="Nadosh.Api/Nadosh.Api.csproj" />
   <Project Path="Nadosh.Core/Nadosh.Core.csproj" />
   <Project Path="Nadosh.Infrastructure/Nadosh.Infrastructure.csproj" />
+  <Project Path="Nadosh.Infrastructure.Tests/Nadosh.Infrastructure.Tests.csproj" />
   <Project Path="Nadosh.Workers/Nadosh.Workers.csproj" />
 </Solution>

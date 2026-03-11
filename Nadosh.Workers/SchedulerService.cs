@@ -14,6 +14,7 @@ namespace Nadosh.Workers;
 /// </summary>
 public class SchedulerService : BackgroundService
 {
+    private static readonly string WorkerId = $"{Environment.MachineName}/scheduler/{Environment.ProcessId}";
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<SchedulerService> _logger;
     private readonly ILeaderElection _leaderElection;
@@ -94,6 +95,7 @@ public class SchedulerService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<NadoshDbContext>();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<Stage1ScanJob>>();
         var portStrategy = scope.ServiceProvider.GetRequiredService<IPortSelectionStrategy>();
+        var dispatchStateService = scope.ServiceProvider.GetRequiredService<IStage1DispatchStateService>();
 
         var now = DateTime.UtcNow;
 
@@ -129,7 +131,38 @@ public class SchedulerService : BackgroundService
                 TargetIp = target.Ip,
                 PortsToScan = ports
             };
-            await queue.EnqueueAsync(job, idempotencyKey: $"stage1:{target.Ip}:{batchId}");
+
+            var dispatchScheduleResult = await dispatchStateService.ScheduleAsync(
+                batchId,
+                target.Ip,
+                ports,
+                WorkerId,
+                ct);
+
+            if (dispatchScheduleResult.Status == Stage1DispatchTransitionStatus.Rejected)
+            {
+                _logger.LogWarning(
+                    "Skipping Stage 1 scheduling for {TargetIp} in batch {BatchId}: {Reason}",
+                    target.Ip,
+                    batchId,
+                    dispatchScheduleResult.Reason);
+                continue;
+            }
+
+            try
+            {
+                await queue.EnqueueAsync(
+                    job,
+                    idempotencyKey: $"stage1:{target.Ip}:{batchId}",
+                    priority: 0,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = target.Ip },
+                    cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                await dispatchStateService.FailAsync(batchId, target.Ip, WorkerId, ex.Message, ct);
+                throw;
+            }
 
             // 4. Compute next schedule based on cadence
             target.LastScheduled = now;

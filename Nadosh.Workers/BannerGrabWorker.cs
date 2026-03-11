@@ -8,6 +8,7 @@ using Nadosh.Core.Models;
 using Nadosh.Core.Scanning;
 using Nadosh.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Workers.Queue;
 
 namespace Nadosh.Workers;
 
@@ -20,6 +21,7 @@ namespace Nadosh.Workers;
 /// </summary>
 public class BannerGrabWorker : BackgroundService
 {
+    private static readonly string WorkerId = $"{Environment.MachineName}/banner/{Environment.ProcessId}";
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<BannerGrabWorker> _logger;
     private readonly IJobQueue<FingerprintJob> _fingerprintQueue;
@@ -68,10 +70,11 @@ public class BannerGrabWorker : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<BannerGrabJob>>();
+        var queuePolicy = scope.ServiceProvider.GetRequiredService<IQueuePolicyProvider>().GetPolicy<BannerGrabJob>();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var msg = await queue.DequeueAsync(TimeSpan.FromMinutes(5), stoppingToken);
+            var msg = await queue.DequeueAsync(queuePolicy.VisibilityTimeout, stoppingToken);
             if (msg == null)
             {
                 await Task.Delay(1000, stoppingToken);
@@ -80,26 +83,160 @@ public class BannerGrabWorker : BackgroundService
 
             try
             {
-                await ProcessJobAsync(msg.Payload, scope.ServiceProvider, stoppingToken);
+                await QueueProcessingUtilities.RunWithLeaseHeartbeatAsync(
+                    queue,
+                    msg,
+                    queuePolicy,
+                    ct => ProcessJobAsync(msg.Payload, scope.ServiceProvider, ct),
+                    _logger,
+                    stoppingToken);
                 await queue.AcknowledgeAsync(msg, stoppingToken);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing banner grab for {TargetIp}:{Port}",
                     msg.Payload.TargetIp, msg.Payload.Port);
-                if (msg.AttemptCount >= 3)
-                    await queue.DeadLetterAsync(msg, ex.Message, stoppingToken);
-                else
-                    await queue.RejectAsync(msg, reenqueue: true, stoppingToken);
+                await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
     }
 
     private async Task ProcessJobAsync(BannerGrabJob job, IServiceProvider scopedProvider, CancellationToken ct)
     {
+        var db = scopedProvider.GetRequiredService<NadoshDbContext>();
+        var handoffDispatchService = scopedProvider.GetRequiredService<IObservationHandoffDispatchService>();
+        var handoffStartResult = await handoffDispatchService.StartAsync(
+            ObservationHandoffDispatchKind.BannerGrab,
+            job.DiscoveryObservationId,
+            job.BatchId,
+            job.TargetIp,
+            job.Port,
+            job.Protocol,
+            null,
+            WorkerId,
+            ct);
+
+        if (handoffStartResult.Status == ObservationHandoffDispatchTransitionStatus.Rejected)
+        {
+            _logger.LogInformation(
+                "Skipping banner-grab job for discovery observation {ObservationId}: {Reason}",
+                job.DiscoveryObservationId,
+                handoffStartResult.Reason);
+            return;
+        }
+
+        if (handoffStartResult.Status == ObservationHandoffDispatchTransitionStatus.NoOp)
+        {
+            _logger.LogInformation(
+                "Skipping duplicate banner-grab job for discovery observation {ObservationId}: {Reason}",
+                job.DiscoveryObservationId,
+                handoffStartResult.Reason);
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
         var serviceName = _serviceIdentifier.IdentifyByPort(job.Port) ?? "unknown";
+        Observation obs;
+        if (handoffStartResult.PreviousState == ObservationHandoffDispatchState.Error
+            && handoffStartResult.ProducedObservationId.HasValue)
+        {
+            var existingObservation = await db.Observations
+                .AsNoTracking()
+                .FirstOrDefaultAsync(o => o.Id == handoffStartResult.ProducedObservationId.Value, ct);
 
+            if (existingObservation != null)
+            {
+                obs = existingObservation;
+                _logger.LogInformation(
+                    "Resuming banner-grab handoff for discovery observation {ObservationId} using existing banner observation {ProducedObservationId}.",
+                    job.DiscoveryObservationId,
+                    obs.Id);
+            }
+            else
+            {
+                obs = await ProbeBannerObservationAsync(job, serviceName, ct);
+                db.Observations.Add(obs);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        else
+        {
+            obs = await ProbeBannerObservationAsync(job, serviceName, ct);
+            db.Observations.Add(obs);
+            await db.SaveChangesAsync(ct);
+        }
+
+        _logger.LogInformation("Banner grab {TargetIp}:{Port} — service={Service}, banner={BannerLen}chars",
+            job.TargetIp, job.Port, obs.ServiceName, obs.Banner?.Length ?? 0);
+
+        // Promote to Tier 2 if the service is interesting
+        var promotedServiceName = obs.ServiceName ?? serviceName;
+        if (obs.State == "open" && PromoteToTier2.Contains(promotedServiceName))
+        {
+            await handoffDispatchService.ScheduleAsync(
+                ObservationHandoffDispatchKind.Fingerprint,
+                obs.Id,
+                job.BatchId,
+                job.TargetIp,
+                job.Port,
+                job.Protocol,
+                promotedServiceName,
+                WorkerId,
+                ct);
+
+            try
+            {
+                await _fingerprintQueue.EnqueueAsync(new FingerprintJob
+                {
+                    BatchId = job.BatchId,
+                    TargetIp = job.TargetIp,
+                    Port = job.Port,
+                    ServiceName = promotedServiceName,
+                    BannerObservationId = obs.Id
+                },
+                idempotencyKey: $"fp:{job.TargetIp}:{job.Port}:{job.BatchId}",
+                priority: 0,
+                enqueueOptions: new JobEnqueueOptions { ShardKey = job.TargetIp },
+                cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                await handoffDispatchService.FailAsync(
+                    ObservationHandoffDispatchKind.Fingerprint,
+                    obs.Id,
+                    WorkerId,
+                    ex.Message,
+                    cancellationToken: ct);
+
+                await handoffDispatchService.FailAsync(
+                    ObservationHandoffDispatchKind.BannerGrab,
+                    job.DiscoveryObservationId,
+                    WorkerId,
+                    ex.Message,
+                    obs.Id,
+                    ct);
+
+                throw;
+            }
+        }
+
+        var handoffCompleteResult = await handoffDispatchService.CompleteAsync(
+            ObservationHandoffDispatchKind.BannerGrab,
+            job.DiscoveryObservationId,
+            obs.Id,
+            WorkerId,
+            ct);
+
+        if (handoffCompleteResult.Status == ObservationHandoffDispatchTransitionStatus.Rejected)
+        {
+            throw new InvalidOperationException(
+                $"Could not complete banner-grab handoff for discovery observation {job.DiscoveryObservationId}: {handoffCompleteResult.Reason}");
+        }
+    }
+
+    private async Task<Observation> ProbeBannerObservationAsync(BannerGrabJob job, string serviceName, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
         var obs = new Observation
         {
             TargetId = job.TargetIp,
@@ -128,20 +265,17 @@ public class BannerGrabWorker : BackgroundService
 
             string? banner = null;
 
-            // For HTTP/HTTPS ports, try an HTTP probe
             if (IsHttpPort(job.Port, serviceName))
             {
                 banner = await SendHttpProbeAsync(stream, job.TargetIp, ct);
                 ParseHttpBanner(banner, obs);
             }
-            // For services that send banners on connect
             else if (BannerOnConnect.Contains(serviceName))
             {
                 banner = await ReadBannerAsync(stream, ct);
             }
             else
             {
-                // Generic: wait briefly for a banner, if nothing comes, send a CRLF
                 banner = await ReadBannerAsync(stream, ct);
                 if (string.IsNullOrEmpty(banner))
                 {
@@ -151,8 +285,6 @@ public class BannerGrabWorker : BackgroundService
             }
 
             obs.Banner = TruncateBanner(banner, 4096);
-
-            // Try to extract version from banner
             ExtractVersionFromBanner(obs);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -169,26 +301,9 @@ public class BannerGrabWorker : BackgroundService
             obs.Banner = $"[error:{ex.GetType().Name}]";
         }
 
-        // Persist
-        var db = scopedProvider.GetRequiredService<NadoshDbContext>();
-        db.Observations.Add(obs);
-        await db.SaveChangesAsync(ct);
-
-        _logger.LogInformation("Banner grab {TargetIp}:{Port} — service={Service}, banner={BannerLen}chars",
-            job.TargetIp, job.Port, obs.ServiceName, obs.Banner?.Length ?? 0);
-
-        // Promote to Tier 2 if the service is interesting
-        if (obs.State == "open" && PromoteToTier2.Contains(serviceName))
-        {
-            await _fingerprintQueue.EnqueueAsync(new FingerprintJob
-            {
-                BatchId = job.BatchId,
-                TargetIp = job.TargetIp,
-                Port = job.Port,
-                ServiceName = obs.ServiceName ?? serviceName,
-                BannerObservationId = obs.Id
-            }, idempotencyKey: $"fp:{job.TargetIp}:{job.Port}:{job.BatchId}");
-        }
+        sw.Stop();
+        obs.LatencyMs ??= (int)sw.ElapsedMilliseconds;
+        return obs;
     }
 
     private static bool IsHttpPort(int port, string serviceName)

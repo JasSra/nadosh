@@ -61,6 +61,12 @@ if (app.Environment.IsDevelopment())
     // Ensure database is created and migrations are applied
     dbContext.Database.Migrate();
 
+    if (!dbContext.RuleConfigs.Any())
+    {
+        dbContext.RuleConfigs.AddRange(DataSeeder.GenerateInitialRuleConfigs());
+        dbContext.SaveChanges();
+    }
+
     if (!dbContext.Targets.Any())
     {
         // Removed Bogus Internet scanning to avoid accidental external network sweeps.

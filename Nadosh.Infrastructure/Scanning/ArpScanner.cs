@@ -53,7 +53,11 @@ public class ArpScanner
                 {
                     TargetIp = ipAddress,
                     MacAddress = macAddress
-                }, idempotencyKey: $"mac:{ipAddress}:{macAddress}");
+                },
+                idempotencyKey: $"mac:{ipAddress}:{macAddress}",
+                priority: 0,
+                enqueueOptions: new JobEnqueueOptions { ShardKey = ipAddress },
+                cancellationToken: ct);
                 
                 return macAddress;
             }

@@ -20,3 +20,10 @@ public interface ICurrentExposureRepository
 {
     Task UpsertExposureAsync(CurrentExposure exposure, CancellationToken cancellationToken = default);
 }
+
+public interface IRuleConfigRepository
+{
+    Task<RuleConfig?> GetActiveRuleAsync(string ruleId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<RuleConfig>> GetActiveRulesAsync(IEnumerable<string> ruleIds, CancellationToken cancellationToken = default);
+    Task<bool> UpsertRuleAsync(RuleConfig ruleConfig, CancellationToken cancellationToken = default);
+}

@@ -9,6 +9,7 @@ using Nadosh.Core.Interfaces;
 using Nadosh.Core.Models;
 using Nadosh.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Workers.Queue;
 
 namespace Nadosh.Workers;
 
@@ -24,6 +25,7 @@ namespace Nadosh.Workers;
 /// </summary>
 public class FingerprintWorker : BackgroundService
 {
+    private static readonly string WorkerId = $"{Environment.MachineName}/fingerprint/{Environment.ProcessId}";
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<FingerprintWorker> _logger;
     private readonly IJobQueue<ClassificationJob> _classificationQueue;
@@ -53,10 +55,11 @@ public class FingerprintWorker : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<FingerprintJob>>();
+        var queuePolicy = scope.ServiceProvider.GetRequiredService<IQueuePolicyProvider>().GetPolicy<FingerprintJob>();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var msg = await queue.DequeueAsync(TimeSpan.FromMinutes(5), stoppingToken);
+            var msg = await queue.DequeueAsync(queuePolicy.VisibilityTimeout, stoppingToken);
             if (msg == null)
             {
                 await Task.Delay(1000, stoppingToken);
@@ -65,27 +68,163 @@ public class FingerprintWorker : BackgroundService
 
             try
             {
-                await ProcessJobAsync(msg.Payload, scope.ServiceProvider, stoppingToken);
+                await QueueProcessingUtilities.RunWithLeaseHeartbeatAsync(
+                    queue,
+                    msg,
+                    queuePolicy,
+                    ct => ProcessJobAsync(msg.Payload, scope.ServiceProvider, ct),
+                    _logger,
+                    stoppingToken);
                 await queue.AcknowledgeAsync(msg, stoppingToken);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing fingerprint for {TargetIp}:{Port}",
                     msg.Payload.TargetIp, msg.Payload.Port);
-                if (msg.AttemptCount >= 3)
-                    await queue.DeadLetterAsync(msg, ex.Message, stoppingToken);
-                else
-                    await queue.RejectAsync(msg, reenqueue: true, stoppingToken);
+                await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
     }
 
     private async Task ProcessJobAsync(FingerprintJob job, IServiceProvider scopedProvider, CancellationToken ct)
     {
-        var sw = Stopwatch.StartNew();
+        var db = scopedProvider.GetRequiredService<NadoshDbContext>();
+        var handoffDispatchService = scopedProvider.GetRequiredService<IObservationHandoffDispatchService>();
+        var pipelineStateService = scopedProvider.GetRequiredService<IObservationPipelineStateService>();
+        var handoffStartResult = await handoffDispatchService.StartAsync(
+            ObservationHandoffDispatchKind.Fingerprint,
+            job.BannerObservationId,
+            job.BatchId,
+            job.TargetIp,
+            job.Port,
+            "tcp",
+            job.ServiceName,
+            WorkerId,
+            ct);
+
+        if (handoffStartResult.Status == ObservationHandoffDispatchTransitionStatus.Rejected)
+        {
+            _logger.LogInformation(
+                "Skipping fingerprint job for banner observation {ObservationId}: {Reason}",
+                job.BannerObservationId,
+                handoffStartResult.Reason);
+            return;
+        }
+
+        if (handoffStartResult.Status == ObservationHandoffDispatchTransitionStatus.NoOp)
+        {
+            _logger.LogInformation(
+                "Skipping duplicate fingerprint job for banner observation {ObservationId}: {Reason}",
+                job.BannerObservationId,
+                handoffStartResult.Reason);
+            return;
+        }
 
         _logger.LogInformation("Fingerprinting {TargetIp}:{Port} (service={Service})",
             job.TargetIp, job.Port, job.ServiceName);
+
+        Observation obs;
+        if (handoffStartResult.PreviousState == ObservationHandoffDispatchState.Error
+            && handoffStartResult.ProducedObservationId.HasValue)
+        {
+            var existingObservation = await db.Observations
+                .FirstOrDefaultAsync(o => o.Id == handoffStartResult.ProducedObservationId.Value, ct);
+
+            if (existingObservation != null)
+            {
+                obs = existingObservation;
+                _logger.LogInformation(
+                    "Resuming fingerprint handoff for banner observation {ObservationId} using existing fingerprint observation {ProducedObservationId}.",
+                    job.BannerObservationId,
+                    obs.Id);
+            }
+            else
+            {
+                obs = await ProduceFingerprintObservationAsync(job, db, ct);
+                db.Observations.Add(obs);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        else
+        {
+            obs = await ProduceFingerprintObservationAsync(job, db, ct);
+            db.Observations.Add(obs);
+            await db.SaveChangesAsync(ct);
+        }
+
+        var observedTransition = await pipelineStateService.TransitionAsync(
+            obs.Id,
+            ObservationPipelineState.Stage1Observed,
+            WorkerId,
+            ct);
+
+        if (!observedTransition.AppliedOrAlreadyAtTarget)
+        {
+            throw new InvalidOperationException(
+                $"Could not initialize pipeline state for observation {obs.Id}: {observedTransition.Reason}");
+        }
+
+        // Feed into classification pipeline
+        await handoffDispatchService.ScheduleAsync(
+            ObservationHandoffDispatchKind.Classification,
+            obs.Id,
+            job.BatchId,
+            job.TargetIp,
+            job.Port,
+            obs.Protocol,
+            obs.ServiceName,
+            WorkerId,
+            ct);
+
+        try
+        {
+            await _classificationQueue.EnqueueAsync(
+                new ClassificationJob { Observation = obs },
+                idempotencyKey: $"clf-fp:{obs.Id}",
+                priority: 0,
+                enqueueOptions: new JobEnqueueOptions { ShardKey = obs.TargetId },
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            await handoffDispatchService.FailAsync(
+                ObservationHandoffDispatchKind.Classification,
+                obs.Id,
+                WorkerId,
+                ex.Message,
+                cancellationToken: ct);
+
+            await handoffDispatchService.FailAsync(
+                ObservationHandoffDispatchKind.Fingerprint,
+                job.BannerObservationId,
+                WorkerId,
+                ex.Message,
+                obs.Id,
+                ct);
+
+            throw;
+        }
+
+        var handoffCompleteResult = await handoffDispatchService.CompleteAsync(
+            ObservationHandoffDispatchKind.Fingerprint,
+            job.BannerObservationId,
+            obs.Id,
+            WorkerId,
+            ct);
+
+        if (handoffCompleteResult.Status == ObservationHandoffDispatchTransitionStatus.Rejected)
+        {
+            throw new InvalidOperationException(
+                $"Could not complete fingerprint handoff for banner observation {job.BannerObservationId}: {handoffCompleteResult.Reason}");
+        }
+
+        _logger.LogInformation("Fingerprint done: {TargetIp}:{Port} — service={Service}, version={Version}",
+            job.TargetIp, job.Port, obs.ServiceName, obs.ServiceVersion ?? "unknown");
+    }
+
+    private async Task<Observation> ProduceFingerprintObservationAsync(FingerprintJob job, NadoshDbContext db, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
 
         var obs = new Observation
         {
@@ -99,11 +238,8 @@ public class FingerprintWorker : BackgroundService
             ServiceName = job.ServiceName
         };
 
-        var db = scopedProvider.GetRequiredService<NadoshDbContext>();
-
         try
         {
-            // Route to the appropriate protocol handler
             if (IsTlsPort(job.Port, job.ServiceName))
             {
                 await FingerprintTlsAsync(job, obs, db, ct);
@@ -138,17 +274,9 @@ public class FingerprintWorker : BackgroundService
             _logger.LogWarning(ex, "Fingerprint failed for {TargetIp}:{Port}", job.TargetIp, job.Port);
         }
 
-        // Persist observation
-        db.Observations.Add(obs);
-        await db.SaveChangesAsync(ct);
-
-        // Feed into classification pipeline
-        await _classificationQueue.EnqueueAsync(
-            new ClassificationJob { Observation = obs },
-            idempotencyKey: $"clf-fp:{obs.Id}");
-
-        _logger.LogInformation("Fingerprint done: {TargetIp}:{Port} — service={Service}, version={Version}",
-            job.TargetIp, job.Port, obs.ServiceName, obs.ServiceVersion ?? "unknown");
+        sw.Stop();
+        obs.LatencyMs ??= (int)sw.ElapsedMilliseconds;
+        return obs;
     }
 
     // ─── TLS Fingerprinting ──────────────────────────────────────────────────────

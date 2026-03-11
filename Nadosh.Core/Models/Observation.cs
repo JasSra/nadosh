@@ -14,6 +14,10 @@ public class Observation
     public string? Fingerprint { get; set; }
     public string? EvidenceJson { get; set; } // JSONB in DB
     public string? ScanRunId { get; set; }
+    public ObservationPipelineState? PipelineState { get; set; }
+    public DateTime? PipelineStateChangedAt { get; set; }
+    public string? PipelineWorkerId { get; set; }
+    public int PipelineRetryCount { get; set; }
 
     // ── Banner & Fingerprinting fields ──
     public string? Banner { get; set; }

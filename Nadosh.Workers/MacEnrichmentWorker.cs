@@ -3,6 +3,7 @@ using Nadosh.Core.Interfaces;
 using Nadosh.Core.Models;
 using Nadosh.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Workers.Queue;
 
 namespace Nadosh.Workers;
 
@@ -33,10 +34,11 @@ public class MacEnrichmentWorker : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<MacEnrichmentJob>>();
+        var queuePolicy = scope.ServiceProvider.GetRequiredService<IQueuePolicyProvider>().GetPolicy<MacEnrichmentJob>();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var msg = await queue.DequeueAsync(TimeSpan.FromMinutes(5), stoppingToken);
+            var msg = await queue.DequeueAsync(queuePolicy.VisibilityTimeout, stoppingToken);
             if (msg == null)
             {
                 await Task.Delay(1000, stoppingToken);
@@ -45,18 +47,21 @@ public class MacEnrichmentWorker : BackgroundService
 
             try
             {
-                await ProcessJobAsync(msg.Payload, scope.ServiceProvider, stoppingToken);
+                await QueueProcessingUtilities.RunWithLeaseHeartbeatAsync(
+                    queue,
+                    msg,
+                    queuePolicy,
+                    ct => ProcessJobAsync(msg.Payload, scope.ServiceProvider, ct),
+                    _logger,
+                    stoppingToken);
                 await queue.AcknowledgeAsync(msg, stoppingToken);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error enriching MAC address {Mac} for {TargetIp}",
                     msg.Payload.MacAddress, msg.Payload.TargetIp);
-                
-                if (msg.AttemptCount >= 3)
-                    await queue.DeadLetterAsync(msg, ex.Message, stoppingToken);
-                else
-                    await queue.RejectAsync(msg, reenqueue: true, stoppingToken);
+
+                await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
     }

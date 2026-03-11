@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Nadosh.Core.Configuration;
 using Nadosh.Core.Interfaces;
 using Nadosh.Core.Scanning;
+using Nadosh.Infrastructure.Queue;
 using StackExchange.Redis;
 
 namespace Nadosh.Infrastructure.Data;
@@ -24,14 +26,23 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITargetRepository, TargetRepository>();
         services.AddScoped<IObservationRepository, ObservationRepository>();
         services.AddScoped<ICurrentExposureRepository, CurrentExposureRepository>();
+        services.AddScoped<IRuleConfigRepository, RuleConfigRepository>();
+        services.AddScoped<IObservationPipelineStateService, ObservationPipelineStateService>();
+        services.AddScoped<IStage1DispatchStateService, Stage1DispatchStateService>();
+        services.AddScoped<IObservationHandoffDispatchService, ObservationHandoffDispatchService>();
+
+        services.Configure<QueueTransportOptions>(configuration.GetSection(QueueTransportOptions.SectionName));
+        services.AddSingleton<IQueuePolicyProvider, QueuePolicyProvider>();
 
         // Redis
-        var redisConn = configuration.GetConnectionString("Redis") ?? "localhost:6379";
+        var redisConn = configuration.GetConnectionString("Redis")
+                        ?? configuration["Redis:ConnectionString"]
+                        ?? "localhost:6379";
         services.AddSingleton<IConnectionMultiplexer>(sp =>
             ConnectionMultiplexer.Connect(redisConn));
 
         // Queue (open generic — auto-creates queue per job type)
-        services.AddSingleton(typeof(IJobQueue<>), typeof(Nadosh.Infrastructure.Queue.RedisJobQueue<>));
+        services.AddSingleton(typeof(IJobQueue<>), typeof(RedisJobQueue<>));
 
         // Scanning infrastructure
         services.AddSingleton<IScanRateLimiter, Nadosh.Infrastructure.Scanning.RedisScanRateLimiter>();

@@ -1,4 +1,5 @@
 using Nadosh.Workers;
+using Nadosh.Workers.Rules;
 using Nadosh.Workers.Workers;
 using Nadosh.Infrastructure.Data;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,6 +8,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddNadoshInfrastructure(builder.Configuration);
 builder.Services.AddHttpClient(); // For webhook notifications
+builder.Services.AddSingleton<IRuleExecutionService, RuleExecutionService>();
 
 // Role-based worker selection via WORKER_ROLE env var.
 // Values: "all" (default), "discovery", "banner", "fingerprint", "classifier", "scheduler"

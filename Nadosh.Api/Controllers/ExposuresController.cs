@@ -78,6 +78,8 @@ public class ExposuresController : ControllerBase
     [HttpPost("search")]
     public async Task<IActionResult> SearchExposures([FromBody] ExposureSearchRequest request, CancellationToken ct)
     {
+        var skip = Math.Max(request.Skip, 0);
+        var take = Math.Clamp(request.Take, 1, 500);
         var query = _dbContext.CurrentExposures.AsNoTracking().AsQueryable();
 
         // Apply query DSL if provided
@@ -113,8 +115,8 @@ public class ExposuresController : ControllerBase
         
         var results = await query
             .OrderByDescending(e => e.LastSeen)
-            .Skip(request.Skip)
-            .Take(request.Take)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
         return Ok(new
@@ -130,7 +132,8 @@ public class ExposureSearchRequest
 {
     /// <summary>
     /// Query DSL string. Example: "service:ssh AND port:22 AND time:last_7d"
-    /// Supported fields: port, service, severity, state, protocol, classification, tier, time
+    /// Supported fields: ip, target, port, service, classification, severity, state, protocol,
+    /// mac, macAddress, macVendor, deviceType, summary, time
     /// Boolean operators: AND, OR, NOT
     /// Time formats: last_7d, last_30d, last_1h, since:2026-01-01
     /// </summary>

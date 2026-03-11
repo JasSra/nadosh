@@ -68,4 +68,65 @@ public static class DataSeeder
             Severity = o.Port == 3389 ? "high" : "low"
         }).ToList();
     }
+
+    public static List<RuleConfig> GenerateInitialRuleConfigs()
+    {
+        var createdAt = DateTime.UtcNow;
+
+        return new List<RuleConfig>
+        {
+            new()
+            {
+                RuleId = "tls-cert-check",
+                Version = "1.0.0",
+                ServiceType = "tls",
+                TriggerConditionsJson = "{\"ports\":[443,8443,9443],\"states\":[\"open\"]}",
+                RequestDefinitionJson = "{\"protocol\":\"tls\",\"action\":\"handshake\"}",
+                MatcherDefinitionJson = "{\"collect\":[\"subject\",\"issuer\",\"expiry\",\"sha256\"]}",
+                SeverityMappingJson = "{\"expired\":\"high\",\"selfSigned\":\"medium\",\"default\":\"info\"}",
+                Enabled = true,
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
+            },
+            new()
+            {
+                RuleId = "http-title-check",
+                Version = "1.0.0",
+                ServiceType = "http",
+                TriggerConditionsJson = "{\"services\":[\"http\",\"https\",\"http-proxy\"],\"states\":[\"open\"]}",
+                RequestDefinitionJson = "{\"protocol\":\"http\",\"method\":\"GET\",\"path\":\"/\"}",
+                MatcherDefinitionJson = "{\"collect\":[\"statusCode\",\"server\",\"title\"]}",
+                SeverityMappingJson = "{\"default\":\"info\"}",
+                Enabled = true,
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
+            },
+            new()
+            {
+                RuleId = "ssh-banner-check",
+                Version = "1.0.0",
+                ServiceType = "ssh",
+                TriggerConditionsJson = "{\"services\":[\"ssh\"],\"states\":[\"open\"]}",
+                RequestDefinitionJson = "{\"protocol\":\"ssh\",\"action\":\"read-banner\"}",
+                MatcherDefinitionJson = "{\"collect\":[\"banner\",\"version\"]}",
+                SeverityMappingJson = "{\"default\":\"info\"}",
+                Enabled = true,
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
+            },
+            new()
+            {
+                RuleId = "rdp-presence-check",
+                Version = "1.0.0",
+                ServiceType = "rdp",
+                TriggerConditionsJson = "{\"services\":[\"rdp\"],\"ports\":[3389],\"states\":[\"open\"]}",
+                RequestDefinitionJson = "{\"protocol\":\"tcp\",\"action\":\"confirm-presence\"}",
+                MatcherDefinitionJson = "{\"collect\":[\"port\",\"service\"]}",
+                SeverityMappingJson = "{\"default\":\"high\"}",
+                Enabled = true,
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt
+            }
+        };
+    }
 }

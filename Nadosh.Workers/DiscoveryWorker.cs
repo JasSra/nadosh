@@ -5,6 +5,7 @@ using Nadosh.Core.Models;
 using Nadosh.Infrastructure.Data;
 using Nadosh.Infrastructure.Scanning;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Workers.Queue;
 
 namespace Nadosh.Workers;
 
@@ -18,6 +19,7 @@ namespace Nadosh.Workers;
 /// </summary>
 public class DiscoveryWorker : BackgroundService
 {
+    private static readonly string WorkerId = $"{Environment.MachineName}/discovery/{Environment.ProcessId}";
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<DiscoveryWorker> _logger;
     private readonly IJobQueue<BannerGrabJob> _bannerQueue;
@@ -54,10 +56,11 @@ public class DiscoveryWorker : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<Stage1ScanJob>>();
+        var queuePolicy = scope.ServiceProvider.GetRequiredService<IQueuePolicyProvider>().GetPolicy<Stage1ScanJob>();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var msg = await queue.DequeueAsync(TimeSpan.FromMinutes(2), stoppingToken);
+            var msg = await queue.DequeueAsync(queuePolicy.VisibilityTimeout, stoppingToken);
             if (msg == null)
             {
                 await Task.Delay(1000, stoppingToken);
@@ -66,22 +69,54 @@ public class DiscoveryWorker : BackgroundService
 
             try
             {
-                await ProcessJobAsync(msg.Payload, scope.ServiceProvider, stoppingToken);
+                await QueueProcessingUtilities.RunWithLeaseHeartbeatAsync(
+                    queue,
+                    msg,
+                    queuePolicy,
+                    ct => ProcessJobAsync(msg.Payload, scope.ServiceProvider, ct),
+                    _logger,
+                    stoppingToken);
                 await queue.AcknowledgeAsync(msg, stoppingToken);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing discovery job for {TargetIp}", msg.Payload.TargetIp);
-                if (msg.AttemptCount >= 3)
-                    await queue.DeadLetterAsync(msg, ex.Message, stoppingToken);
-                else
-                    await queue.RejectAsync(msg, reenqueue: true, stoppingToken);
+                await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
     }
 
     private async Task ProcessJobAsync(Stage1ScanJob job, IServiceProvider scopedProvider, CancellationToken ct)
     {
+        var dispatchStateService = scopedProvider.GetRequiredService<IStage1DispatchStateService>();
+        var handoffDispatchService = scopedProvider.GetRequiredService<IObservationHandoffDispatchService>();
+        var startResult = await dispatchStateService.StartAsync(
+            job.BatchId,
+            job.TargetIp,
+            job.PortsToScan,
+            WorkerId,
+            ct);
+
+        if (startResult.Status == Stage1DispatchTransitionStatus.Rejected)
+        {
+            _logger.LogInformation(
+                "Skipping discovery job for {TargetIp} in batch {BatchId}: {Reason}",
+                job.TargetIp,
+                job.BatchId,
+                startResult.Reason);
+            return;
+        }
+
+        if (startResult.Status == Stage1DispatchTransitionStatus.NoOp)
+        {
+            _logger.LogInformation(
+                "Skipping duplicate discovery job for {TargetIp} in batch {BatchId}: {Reason}",
+                job.TargetIp,
+                job.BatchId,
+                startResult.Reason);
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
         _logger.LogInformation("Discovery scan: {TargetIp} — {PortCount} ports",
             job.TargetIp, job.PortsToScan.Count);
@@ -96,51 +131,109 @@ public class DiscoveryWorker : BackgroundService
             tasks.Add(ProbeWithSemaphore(semaphore, job.TargetIp, port, job.BatchId, ct));
         }
 
-        var observations = await Task.WhenAll(tasks);
-        sw.Stop();
-
-        // Persist all observations in batch
-        var db = scopedProvider.GetRequiredService<NadoshDbContext>();
-        db.Observations.AddRange(observations);
-        await db.SaveChangesAsync(ct);
-
-        // Attempt ARP resolution for local network targets (fire and forget, non-blocking)
-        if (IsLocalNetwork(job.TargetIp))
+        try
         {
-            _ = Task.Run(async () =>
+            var observations = await Task.WhenAll(tasks);
+            sw.Stop();
+
+            // Persist all observations in batch
+            var db = scopedProvider.GetRequiredService<NadoshDbContext>();
+            db.Observations.AddRange(observations);
+            await db.SaveChangesAsync(ct);
+
+            await dispatchStateService.CompleteAsync(
+                job.BatchId,
+                job.TargetIp,
+                WorkerId,
+                observations,
+                ct);
+
+            // Attempt ARP resolution for local network targets (fire and forget, non-blocking)
+            if (IsLocalNetwork(job.TargetIp))
             {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _arpScanner.ResolveMacAddressAsync(job.TargetIp, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "ARP resolution failed for {Ip}", job.TargetIp);
+                    }
+                }, ct);
+            }
+
+            // Funnel open ports to Tier 1 banner grab queue
+            var openObs = observations.Where(o => o.State == "open").ToList();
+            foreach (var obs in openObs)
+            {
+                var handoffScheduleResult = await handoffDispatchService.ScheduleAsync(
+                    ObservationHandoffDispatchKind.BannerGrab,
+                    obs.Id,
+                    job.BatchId,
+                    job.TargetIp,
+                    obs.Port,
+                    obs.Protocol,
+                    obs.ServiceName,
+                    WorkerId,
+                    ct);
+
+                if (handoffScheduleResult.Status == ObservationHandoffDispatchTransitionStatus.Rejected)
+                {
+                    _logger.LogWarning(
+                        "Skipping banner-grab enqueue for observation {ObservationId}: {Reason}",
+                        obs.Id,
+                        handoffScheduleResult.Reason);
+                    continue;
+                }
+
                 try
                 {
-                    await _arpScanner.ResolveMacAddressAsync(job.TargetIp, ct);
+                    await _bannerQueue.EnqueueAsync(new BannerGrabJob
+                    {
+                        BatchId = job.BatchId,
+                        TargetIp = job.TargetIp,
+                        Port = obs.Port,
+                        Protocol = obs.Protocol,
+                        DiscoveryObservationId = obs.Id
+                    },
+                    idempotencyKey: $"banner:{job.TargetIp}:{obs.Port}:{job.BatchId}",
+                    priority: 0,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = job.TargetIp },
+                    cancellationToken: ct);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "ARP resolution failed for {Ip}", job.TargetIp);
+                    await handoffDispatchService.FailAsync(
+                        ObservationHandoffDispatchKind.BannerGrab,
+                        obs.Id,
+                        WorkerId,
+                        ex.Message,
+                        cancellationToken: ct);
+
+                    _logger.LogError(
+                        ex,
+                        "Failed to enqueue banner-grab handoff for {TargetIp}:{Port} (observation {ObservationId})",
+                        job.TargetIp,
+                        obs.Port,
+                        obs.Id);
                 }
-            }, ct);
-        }
+            }
 
-        // Funnel open ports to Tier 1 banner grab queue
-        var openObs = observations.Where(o => o.State == "open").ToList();
-        foreach (var obs in openObs)
+            _logger.LogInformation(
+                "Discovery complete: {TargetIp} — {Open} open, {Closed} closed, {Filtered} filtered in {ElapsedMs}ms",
+                job.TargetIp,
+                observations.Count(o => o.State == "open"),
+                observations.Count(o => o.State == "closed"),
+                observations.Count(o => o.State == "filtered"),
+                sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
         {
-            await _bannerQueue.EnqueueAsync(new BannerGrabJob
-            {
-                BatchId = job.BatchId,
-                TargetIp = job.TargetIp,
-                Port = obs.Port,
-                Protocol = obs.Protocol,
-                DiscoveryObservationId = obs.Id
-            }, idempotencyKey: $"banner:{job.TargetIp}:{obs.Port}:{job.BatchId}");
+            await dispatchStateService.FailAsync(job.BatchId, job.TargetIp, WorkerId, ex.Message, ct);
+            throw;
         }
-
-        _logger.LogInformation(
-            "Discovery complete: {TargetIp} — {Open} open, {Closed} closed, {Filtered} filtered in {ElapsedMs}ms",
-            job.TargetIp,
-            observations.Count(o => o.State == "open"),
-            observations.Count(o => o.State == "closed"),
-            observations.Count(o => o.State == "filtered"),
-            sw.ElapsedMilliseconds);
     }
 
     private async Task<Observation> ProbeWithSemaphore(

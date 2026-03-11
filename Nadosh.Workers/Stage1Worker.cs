@@ -3,11 +3,13 @@ using Nadosh.Core.Interfaces;
 using Nadosh.Core.Models;
 using Nadosh.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Workers.Queue;
 
 namespace Nadosh.Workers;
 
 public class Stage1Worker : BackgroundService
 {
+    private static readonly string WorkerId = $"{Environment.MachineName}/stage1/{Environment.ProcessId}";
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<Stage1Worker> _logger;
     private readonly IJobQueue<ClassificationJob> _classificationQueue;
@@ -25,10 +27,11 @@ public class Stage1Worker : BackgroundService
         
         using var scope = _serviceProvider.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue<Stage1ScanJob>>();
+        var queuePolicy = scope.ServiceProvider.GetRequiredService<IQueuePolicyProvider>().GetPolicy<Stage1ScanJob>();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var msg = await queue.DequeueAsync(TimeSpan.FromMinutes(2), stoppingToken);
+            var msg = await queue.DequeueAsync(queuePolicy.VisibilityTimeout, stoppingToken);
             if (msg == null)
             {
                 await Task.Delay(2000, stoppingToken);
@@ -37,13 +40,19 @@ public class Stage1Worker : BackgroundService
 
             try
             {
-                await ProcessJobAsync(msg.Payload, scope.ServiceProvider, stoppingToken);
+                await QueueProcessingUtilities.RunWithLeaseHeartbeatAsync(
+                    queue,
+                    msg,
+                    queuePolicy,
+                    ct => ProcessJobAsync(msg.Payload, scope.ServiceProvider, ct),
+                    _logger,
+                    stoppingToken);
                 await queue.AcknowledgeAsync(msg, stoppingToken);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Error processing Stage 1 job for IP {msg.Payload.TargetIp}");
-                await queue.DeadLetterAsync(msg, ex.Message, stoppingToken);
+                await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
     }
@@ -61,13 +70,43 @@ public class Stage1Worker : BackgroundService
         }
 
         var db = scopedProvider.GetRequiredService<NadoshDbContext>();
+        var handoffDispatchService = scopedProvider.GetRequiredService<IObservationHandoffDispatchService>();
         db.Observations.AddRange(observations);
         await db.SaveChangesAsync(ct);
 
         // Queue for classification
         foreach (var obs in observations)
         {
-            await _classificationQueue.EnqueueAsync(new ClassificationJob { Observation = obs }, idempotencyKey: $"clf:{obs.Id}");
+            await handoffDispatchService.ScheduleAsync(
+                ObservationHandoffDispatchKind.Classification,
+                obs.Id,
+                job.BatchId,
+                obs.TargetId,
+                obs.Port,
+                obs.Protocol,
+                obs.ServiceName,
+                WorkerId,
+                ct);
+
+            try
+            {
+                await _classificationQueue.EnqueueAsync(
+                    new ClassificationJob { Observation = obs },
+                    idempotencyKey: $"clf:{obs.Id}",
+                    priority: 0,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = obs.TargetId },
+                    cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                await handoffDispatchService.FailAsync(
+                    ObservationHandoffDispatchKind.Classification,
+                    obs.Id,
+                    WorkerId,
+                    ex.Message,
+                    cancellationToken: ct);
+                throw;
+            }
         }
     }
 

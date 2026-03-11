@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Nadosh.Api.Infrastructure;
 using Nadosh.Infrastructure.Data;
 using StackExchange.Redis;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using System.Text.Json;
 namespace Nadosh.Api.Controllers;
 
 [ApiController]
+[ApiKeyAuth]
 [Route("v1/timeline")]
 public class TimelineController : ControllerBase
 {

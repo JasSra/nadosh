@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Nadosh.Infrastructure.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Nadosh.Infrastructure.Migrations
 {
     [DbContext(typeof(NadoshDbContext))]
-    partial class NadoshDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260311071712_AddStage1DispatchTracking")]
+    partial class AddStage1DispatchTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -345,70 +348,6 @@ namespace Nadosh.Infrastructure.Migrations
                     b.HasIndex("TargetId");
 
                     b.ToTable("Observations");
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.ObservationHandoffDispatch", b =>
-                {
-                    b.Property<string>("DispatchKind")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<long>("SourceObservationId")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("BatchId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("DeliveryCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("LastError")
-                        .HasColumnType("text");
-
-                    b.Property<int>("Port")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("ProducedObservationId")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Protocol")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("ScheduledAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ServiceName")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("TargetIp")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("WorkerId")
-                        .HasColumnType("text");
-
-                    b.HasKey("DispatchKind", "SourceObservationId");
-
-                    b.HasIndex("ProducedObservationId");
-
-                    b.HasIndex("ScheduledAt");
-
-                    b.HasIndex("State");
-
-                    b.ToTable("ObservationHandoffDispatches");
                 });
 
             modelBuilder.Entity("Nadosh.Core.Models.RuleConfig", b =>
