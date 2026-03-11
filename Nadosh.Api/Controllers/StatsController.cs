@@ -149,7 +149,49 @@ public class StatsController : ControllerBase
         }
     }
 
-    [HttpGet("subnet/{cidr}")]
+    [HttpGet("trends")]
+    public async Task<IActionResult> GetTrends([FromQuery] int days = 14, [FromQuery] string granularity = "day", CancellationToken ct = default)
+    {
+        days = Math.Clamp(days, 1, 90);
+        var since = DateTime.UtcNow.AddDays(-days);
+
+        // Count new exposures (FirstSeen) per day from CurrentExposures
+        var newExposures = await _dbContext.CurrentExposures
+            .AsNoTracking()
+            .Where(e => e.FirstSeen >= since)
+            .GroupBy(e => e.FirstSeen.Date)
+            .Select(g => new { date = g.Key, count = g.Count() })
+            .OrderBy(x => x.date)
+            .ToListAsync(ct);
+
+        // Count state changes per day
+        var stateChanges = await _dbContext.CurrentExposures
+            .AsNoTracking()
+            .Where(e => e.LastChanged >= since)
+            .GroupBy(e => e.LastChanged.Date)
+            .Select(g => new { date = g.Key, count = g.Count() })
+            .OrderBy(x => x.date)
+            .ToListAsync(ct);
+
+        // Total observations per day (as a proxy for scan activity)
+        var scanActivity = await _dbContext.Observations
+            .AsNoTracking()
+            .Where(o => o.ObservedAt >= since)
+            .GroupBy(o => o.ObservedAt.Date)
+            .Select(g => new { date = g.Key, total = g.Count(), open = g.Count(x => x.State == "open") })
+            .OrderBy(x => x.date)
+            .ToListAsync(ct);
+
+        return Ok(new
+        {
+            days,
+            granularity,
+            since,
+            newExposures,
+            stateChanges,
+            scanActivity
+        });
+    }
     public async Task<IActionResult> GetSubnetStats(string cidr, CancellationToken ct)
     {
         // Simple prefix match for demo (e.g., "192.168.4")

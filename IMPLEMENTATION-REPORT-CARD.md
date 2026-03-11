@@ -173,6 +173,35 @@ This file is the living status tracker for closing the gap between the current r
 - 2026-03-11 — Shard-aware Redis queue integration tests (`Nadosh.Infrastructure.Tests`) — **Passed**
 - 2026-03-11 — Full solution build after shard-aware dispatch slice — **Passed**
 
-## Next recommended slice
+## What changed in this pass (continued — finish remaining items)
 
-With shard-aware dispatch now in place, the next highest-value workflow gap is broader end-to-end state-machine coverage: finish persisted dispatch/state transitions for the remaining worker paths, strengthen retry/suppression semantics across non-Stage-2 hops, and then widen Stage 2 rule execution coverage beyond the current TLS/HTTP-heavy slice.
+- Created `NadoshDbContext` (EF Core DbContext with all 11 entity tables, enum→string conversions, composite PKs, and indices matching the migration snapshot) — the infrastructure project was broken without this file.
+- Created `TargetRepository`, `ObservationRepository`, `CurrentExposureRepository`, and `RuleConfigRepository` implementations in `Nadosh.Infrastructure/Data/`.
+- Created `ObservationPipelineStateService` with valid-transitions enforcement and `RetryAsync` for Error→reentry.
+- Created `Stage1DispatchStateService` with idempotent `ScheduleAsync` and guarded `StartAsync`/`CompleteAsync`/`FailAsync` transitions.
+- Created `ObservationHandoffDispatchService` with idempotent `ScheduleAsync`, duplicate-delivery NoOp in `StartAsync`, and `CompleteAsync`/`FailAsync` completion paths.
+- Replaced SSH observation-fallback (`ExecuteSshFallback`) with a live TCP probe (`ExecuteSshRuleAsync`) that connects to the target, reads the SSH identification string, and parses the version — with graceful fallback to observation data when the live probe fails.
+- Replaced RDP observation-fallback (`ExecuteRdpFallback`) with a live TPKT/X.224 CR probe (`ExecuteRdpRuleAsync`) that sends an RDP connection request and looks for a TPKT CC response — with graceful fallback when the live probe fails.
+- Added `POST /v1/exposures/batch` endpoint (up to 100 IPs, pipelined Redis reads + Postgres fallback).
+- Added `GET /v1/exposures/{ip}/enrichments` endpoint (all enrichment results for an IP, via observation→enrichment join).
+- Replaced offset-based pagination in `POST /v1/exposures/search` with cursor-based pagination (`After`/`EndCursor` tokens).
+- Rewrote `GET /v1/history/{ip}` with cursor-based pagination, added `GET /v1/history/{ip}/changes` (sequential change detection), and added `POST /v1/history/search` (filtered time-bounded search with cursor pagination and mandatory time-range enforcement for partition pruning).
+- Added `GET /v1/stats/trends` endpoint (new exposures per day, state changes per day, scan activity per day — configurable day range and granularity).
+- Added `POST /v1/certificates/search` endpoint (filter by subject, issuer, SAN, IP, expiry range, expired-only, self-signed-only; cursor-based pagination).
+- Added suppression enforcement in `SchedulerService`: loads active `SuppressionRule` rows at scheduling time and skips targets that match any rule by exact IP or CIDR prefix before enqueuing Stage 1 jobs.
+- Added `/health/live` liveness endpoint to the API (no dependency checks — process-alive only), complementing the existing `/health/ready` readiness endpoint.
+
+## Still open after this pass
+
+- Broader cross-stage retry orchestration and suppression state transitions remain incomplete (suppression enforcement is at the scheduler level; mid-pipeline suppression is not yet wired).
+- Full production-grade security features: API key management endpoints (CRUD), RBAC enforcement per endpoint, OAuth2 client-credentials flow.
+- Operational dashboards (Epic 4.6): These depend on the external OTel receiver.
+- Alerting rules (Epic 4.7): Prometheus/Alertmanager alert definitions.
+- Dead-letter queue management API (Epic 4.8): Admin endpoints to inspect/retry/purge DLQ items.
+- Audit query endpoint (Epic 4.9.3): Operator-facing endpoint to search audit events.
+- Compliance reporting (Epic 4.10.5): Exportable reports for auditors.
+
+## Verification log (continued)
+
+- 2026-03-11 — Full solution build after infrastructure implementation and all remaining feature slices — **Passed**
+- 2026-03-11 — Redis integration tests (require external Redis at localhost:6389) — **Skipped in CI (no Redis)**
