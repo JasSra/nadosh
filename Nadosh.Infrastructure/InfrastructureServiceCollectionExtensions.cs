@@ -27,10 +27,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IObservationRepository, ObservationRepository>();
         services.AddScoped<ICurrentExposureRepository, CurrentExposureRepository>();
         services.AddScoped<IRuleConfigRepository, RuleConfigRepository>();
+        services.AddScoped<IAuditService, AuditService>();
+        services.AddScoped<IEdgeControlPlaneService, EdgeControlPlaneService>();
         services.AddScoped<IObservationPipelineStateService, ObservationPipelineStateService>();
         services.AddScoped<IStage1DispatchStateService, Stage1DispatchStateService>();
         services.AddScoped<IObservationHandoffDispatchService, ObservationHandoffDispatchService>();
 
+        services.Configure<EdgeControlPlaneOptions>(configuration.GetSection(EdgeControlPlaneOptions.SectionName));
         services.Configure<QueueTransportOptions>(configuration.GetSection(QueueTransportOptions.SectionName));
         services.AddSingleton<IQueuePolicyProvider, QueuePolicyProvider>();
 

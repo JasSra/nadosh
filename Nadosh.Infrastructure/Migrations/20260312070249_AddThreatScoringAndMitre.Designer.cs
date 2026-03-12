@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Nadosh.Infrastructure.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Nadosh.Infrastructure.Migrations
 {
     [DbContext(typeof(NadoshDbContext))]
-    partial class NadoshDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260312070249_AddThreatScoringAndMitre")]
+    partial class AddThreatScoringAndMitre
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -62,87 +65,6 @@ namespace Nadosh.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("AuditEvents", (string)null);
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.AuthorizedTask", b =>
-                {
-                    b.Property<string>("TaskId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("AgentId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("ApprovalReference")
-                        .HasColumnType("text");
-
-                    b.Property<int>("AttemptCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("ClaimedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("IssuedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("IssuedBy")
-                        .HasColumnType("text");
-
-                    b.Property<string>("LeaseToken")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("NotBefore")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Priority")
-                        .HasColumnType("integer");
-
-                    b.PrimitiveCollection<List<string>>("RequiredCapabilities")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<string>("ResultSummaryJson")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ScopeJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("SiteId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("TaskKind")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.HasKey("TaskId");
-
-                    b.HasIndex("AgentId");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.HasIndex("SiteId", "Status");
-
-                    b.ToTable("AuthorizedTasks", (string)null);
                 });
 
             modelBuilder.Entity("Nadosh.Core.Models.CertificateObservation", b =>
@@ -298,118 +220,6 @@ namespace Nadosh.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("CurrentExposures", (string)null);
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.EdgeAgent", b =>
-                {
-                    b.Property<string>("AgentId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.PrimitiveCollection<List<string>>("AdvertisedCapabilities")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<string>("AgentVersion")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Architecture")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("EnrolledAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Hostname")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("LastHeartbeatAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastKnownAddress")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("LastSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("text");
-
-                    b.Property<string>("OperatingSystem")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("SiteId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.HasKey("AgentId");
-
-                    b.HasIndex("LastSeenAt");
-
-                    b.HasIndex("SiteId");
-
-                    b.HasIndex("Status");
-
-                    b.ToTable("EdgeAgents", (string)null);
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.EdgeSite", b =>
-                {
-                    b.Property<string>("SiteId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.PrimitiveCollection<List<string>>("AllowedCapabilities")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.PrimitiveCollection<List<string>>("AllowedCidrs")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<string>("ApprovalScopeJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DataHandlingPolicyJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("SiteId");
-
-                    b.HasIndex("Name");
-
-                    b.ToTable("EdgeSites", (string)null);
                 });
 
             modelBuilder.Entity("Nadosh.Core.Models.EnrichmentResult", b =>
@@ -908,29 +718,6 @@ namespace Nadosh.Infrastructure.Migrations
                     b.HasIndex("NextScheduled");
 
                     b.ToTable("Targets", (string)null);
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.AuthorizedTask", b =>
-                {
-                    b.HasOne("Nadosh.Core.Models.EdgeAgent", null)
-                        .WithMany()
-                        .HasForeignKey("AgentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Nadosh.Core.Models.EdgeSite", null)
-                        .WithMany()
-                        .HasForeignKey("SiteId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Nadosh.Core.Models.EdgeAgent", b =>
-                {
-                    b.HasOne("Nadosh.Core.Models.EdgeSite", null)
-                        .WithMany()
-                        .HasForeignKey("SiteId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

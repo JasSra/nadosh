@@ -41,6 +41,10 @@ builder.Services.AddNadoshInfrastructure(builder.Configuration);
 // CVE enrichment service
 builder.Services.AddHttpClient<Nadosh.Core.Services.CveEnrichmentService>();
 
+// Threat scoring and MITRE mapping services
+builder.Services.AddScoped<Nadosh.Core.Services.ThreatScoringService>();
+builder.Services.AddScoped<Nadosh.Core.Services.MitreAttackMappingService>();
+
 // Add CORS for frontend
 builder.Services.AddCors(options =>
 {

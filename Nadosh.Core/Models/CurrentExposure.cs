@@ -26,4 +26,14 @@ public class CurrentExposure
     public double? HighestCvssScore { get; set; }
     public string? CveSeverity { get; set; } // Highest CVE severity
     public DateTime? CveLastChecked { get; set; }
+    
+    // ── Threat scoring fields ──
+    public double? ThreatScore { get; set; } // ML-based risk score (0-100)
+    public string? ThreatLevel { get; set; } // critical, high, medium, low, minimal
+    public string? ThreatExplanation { get; set; } // Human-readable risk factors
+    public DateTime? ThreatScoreCalculatedAt { get; set; }
+    
+    // ── MITRE ATT&CK alignment ──
+    public string? MitreTactics { get; set; } // Comma-separated MITRE tactics
+    public string? MitreTechniques { get; set; } // Comma-separated MITRE technique IDs
 }

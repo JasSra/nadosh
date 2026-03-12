@@ -207,6 +207,12 @@ public class ExposuresController : ControllerBase
 
             if (request.Port.HasValue)
                 query = query.Where(e => e.Port == request.Port.Value);
+            
+            if (!string.IsNullOrEmpty(request.ThreatLevel))
+                query = query.Where(e => e.ThreatLevel == request.ThreatLevel);
+            
+            if (request.MinThreatScore.HasValue)
+                query = query.Where(e => e.ThreatScore >= request.MinThreatScore.Value);
         }
 
         // Apply cursor-based pagination
@@ -275,6 +281,12 @@ public class ExposureSearchRequest
     public string? Severity { get; set; }
     public string? Classification { get; set; }
     public int? Port { get; set; }
+    
+    /// <summary>Filter by threat level: critical, high, medium, low, minimal</summary>
+    public string? ThreatLevel { get; set; }
+    
+    /// <summary>Filter by minimum threat score (0-100)</summary>
+    public double? MinThreatScore { get; set; }
     
     /// <summary>Opaque cursor from a previous page's PageInfo.EndCursor for cursor-based pagination.</summary>
     public string? After { get; set; }

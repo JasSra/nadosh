@@ -7,6 +7,9 @@ public class NadoshDbContext : DbContext
 {
     public NadoshDbContext(DbContextOptions<NadoshDbContext> options) : base(options) { }
 
+    public DbSet<EdgeAgent> EdgeAgents => Set<EdgeAgent>();
+    public DbSet<EdgeSite> EdgeSites => Set<EdgeSite>();
+    public DbSet<AuthorizedTask> AuthorizedTasks => Set<AuthorizedTask>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<CertificateObservation> CertificateObservations => Set<CertificateObservation>();
     public DbSet<CurrentExposure> CurrentExposures => Set<CurrentExposure>();
@@ -27,6 +30,61 @@ public class NadoshDbContext : DbContext
         {
             b.ToTable("AuditEvents");
             b.HasKey(e => e.Id);
+        });
+
+        modelBuilder.Entity<EdgeSite>(b =>
+        {
+            b.ToTable("EdgeSites");
+            b.HasKey(e => e.SiteId);
+            b.HasIndex(e => e.Name);
+            b.Property(e => e.SiteId).HasMaxLength(128);
+            b.Property(e => e.Name).HasMaxLength(256);
+            b.PrimitiveCollection(e => e.AllowedCidrs).HasColumnType("text[]");
+            b.PrimitiveCollection(e => e.AllowedCapabilities).HasColumnType("text[]");
+        });
+
+        modelBuilder.Entity<EdgeAgent>(b =>
+        {
+            b.ToTable("EdgeAgents");
+            b.HasKey(e => e.AgentId);
+            b.HasIndex(e => e.SiteId);
+            b.HasIndex(e => e.Status);
+            b.HasIndex(e => e.LastSeenAt);
+            b.Property(e => e.AgentId).HasMaxLength(128);
+            b.Property(e => e.SiteId).HasMaxLength(128);
+            b.Property(e => e.Status)
+                .HasConversion<string>()
+                .HasMaxLength(32);
+            b.PrimitiveCollection(e => e.AdvertisedCapabilities).HasColumnType("text[]");
+            b.HasOne<EdgeSite>()
+                .WithMany()
+                .HasForeignKey(e => e.SiteId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<AuthorizedTask>(b =>
+        {
+            b.ToTable("AuthorizedTasks");
+            b.HasKey(e => e.TaskId);
+            b.HasIndex(e => new { e.SiteId, e.Status });
+            b.HasIndex(e => e.AgentId);
+            b.HasIndex(e => e.ExpiresAt);
+            b.Property(e => e.TaskId).HasMaxLength(128);
+            b.Property(e => e.SiteId).HasMaxLength(128);
+            b.Property(e => e.AgentId).HasMaxLength(128);
+            b.Property(e => e.TaskKind).HasMaxLength(128);
+            b.Property(e => e.Status)
+                .HasConversion<string>()
+                .HasMaxLength(32);
+            b.PrimitiveCollection(e => e.RequiredCapabilities).HasColumnType("text[]");
+            b.HasOne<EdgeSite>()
+                .WithMany()
+                .HasForeignKey(e => e.SiteId)
+                .OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<EdgeAgent>()
+                .WithMany()
+                .HasForeignKey(e => e.AgentId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<CertificateObservation>(b =>

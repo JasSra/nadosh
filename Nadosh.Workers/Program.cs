@@ -1,6 +1,9 @@
 using Nadosh.Workers;
+using Nadosh.Workers.Edge;
 using Nadosh.Workers.Rules;
 using Nadosh.Workers.Workers;
+using Nadosh.Core.Interfaces;
+using Nadosh.Core.Services;
 using Nadosh.Infrastructure.Data;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -9,9 +12,20 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddNadoshInfrastructure(builder.Configuration);
 builder.Services.AddHttpClient(); // For webhook notifications
 builder.Services.AddSingleton<IRuleExecutionService, RuleExecutionService>();
+builder.Services.AddSingleton<IAssessmentToolCatalog, DefaultAssessmentToolCatalog>();
+
+if (builder.Configuration.GetValue<bool>("EdgeControlPlane:Enabled"))
+{
+    builder.Services.AddHostedService<EdgeControlPlaneSyncService>();
+}
 
 // CVE enrichment service
 builder.Services.AddHttpClient<Nadosh.Core.Services.CveEnrichmentService>();
+
+// Threat scoring and MITRE mapping services
+builder.Services.AddScoped<ThreatScoringService>();
+builder.Services.AddScoped<MitreAttackMappingService>();
+builder.Services.AddScoped<SnmpScannerService>();
 
 // Role-based worker selection via WORKER_ROLE env var.
 // Values: "all" (default), "discovery", "banner", "fingerprint", "classifier", "scheduler"
@@ -51,9 +65,19 @@ if (ShouldRun("mac-enrichment"))
 if (ShouldRun("cve-enrichment"))
     builder.Services.AddHostedService<CveEnrichmentWorker>();
 
+if (ShouldRun("threat-scoring"))
+    builder.Services.AddHostedService<ThreatScoringWorker>();
+
 // Keep Stage2Worker for legacy enrichment rules (still fed by classifier)
 if (ShouldRun("enrichment") || ShouldRun("all"))
     builder.Services.AddHostedService<Stage2Worker>();
 
 var host = builder.Build();
+
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+logger.LogInformation(
+    "Starting Nadosh workers with roles '{Roles}' and edge control-plane sync {EdgeSyncState}.",
+    workerRole,
+    builder.Configuration.GetValue<bool>("EdgeControlPlane:Enabled") ? "enabled" : "disabled");
+
 host.Run();
