@@ -59,4 +59,70 @@ public sealed class EdgeAgentsController : ControllerBase
         var tasks = await _edgeControlPlaneService.GetPendingTasksAsync(agentId, cancellationToken);
         return Ok(new { Count = tasks.Count, Results = tasks });
     }
+
+    [HttpPost("{agentId}/tasks/{taskId}/claim")]
+    public async Task<IActionResult> ClaimTask(string agentId, string taskId, [FromBody] EdgeTaskClaimRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _edgeControlPlaneService.ClaimTaskAsync(agentId, taskId, request, cancellationToken);
+            return Ok(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return ValidationProblem(detail: ex.Message);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { Message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { Message = ex.Message });
+        }
+    }
+
+    [HttpPost("{agentId}/tasks/{taskId}/complete")]
+    public async Task<IActionResult> CompleteTask(string agentId, string taskId, [FromBody] EdgeTaskCompletionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _edgeControlPlaneService.CompleteTaskAsync(agentId, taskId, request, cancellationToken);
+            return Ok(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return ValidationProblem(detail: ex.Message);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { Message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { Message = ex.Message });
+        }
+    }
+
+    [HttpPost("{agentId}/tasks/{taskId}/fail")]
+    public async Task<IActionResult> FailTask(string agentId, string taskId, [FromBody] EdgeTaskFailureRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _edgeControlPlaneService.FailTaskAsync(agentId, taskId, request, cancellationToken);
+            return Ok(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return ValidationProblem(detail: ex.Message);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { Message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { Message = ex.Message });
+        }
+    }
 }

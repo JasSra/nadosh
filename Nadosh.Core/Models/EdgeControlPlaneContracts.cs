@@ -43,6 +43,44 @@ public sealed record EdgeHeartbeatResponse
     public DateTime ServerTimeUtc { get; init; }
 }
 
+public sealed record EdgeTaskClaimRequest
+{
+    public string SiteId { get; init; } = string.Empty;
+}
+
+public sealed record EdgeTaskClaimResponse
+{
+    public string TaskId { get; init; } = string.Empty;
+    public string AgentId { get; init; } = string.Empty;
+    public string SiteId { get; init; } = string.Empty;
+    public string LeaseToken { get; init; } = string.Empty;
+    public DateTime ClaimedAt { get; init; }
+    public AuthorizedTaskDescriptor Task { get; init; } = new();
+}
+
+public sealed record EdgeTaskCompletionRequest
+{
+    public string LeaseToken { get; init; } = string.Empty;
+    public string ResultStatus { get; init; } = "queued-local";
+    public string Summary { get; init; } = string.Empty;
+    public string? MetadataJson { get; init; }
+}
+
+public sealed record EdgeTaskFailureRequest
+{
+    public string LeaseToken { get; init; } = string.Empty;
+    public string ErrorMessage { get; init; } = string.Empty;
+    public bool Requeue { get; init; }
+    public string? MetadataJson { get; init; }
+}
+
+public sealed record EdgeTaskUpdateResponse
+{
+    public string TaskId { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public DateTime ServerTimeUtc { get; init; }
+}
+
 public sealed record AuthorizedTaskDescriptor
 {
     public string TaskId { get; init; } = string.Empty;

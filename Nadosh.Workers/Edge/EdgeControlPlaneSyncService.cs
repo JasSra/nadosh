@@ -6,11 +6,17 @@ using Microsoft.Extensions.Options;
 using Nadosh.Core.Configuration;
 using Nadosh.Core.Interfaces;
 using Nadosh.Core.Models;
+using Nadosh.Core.Services;
 
 namespace Nadosh.Workers.Edge;
 
 public sealed class EdgeControlPlaneSyncService : BackgroundService
 {
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private static readonly string[] FullCapabilityCatalog =
     [
         "role:scheduler",
@@ -28,17 +34,26 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IAssessmentToolCatalog _assessmentToolCatalog;
+    private readonly IJobQueue<Stage1ScanJob> _stage1Queue;
+    private readonly IJobQueue<Stage2EnrichmentJob> _stage2Queue;
+    private readonly IJobQueue<MacEnrichmentJob> _macEnrichmentQueue;
     private readonly IOptionsMonitor<EdgeControlPlaneOptions> _optionsMonitor;
     private readonly ILogger<EdgeControlPlaneSyncService> _logger;
 
     public EdgeControlPlaneSyncService(
         IHttpClientFactory httpClientFactory,
         IAssessmentToolCatalog assessmentToolCatalog,
+        IJobQueue<Stage1ScanJob> stage1Queue,
+        IJobQueue<Stage2EnrichmentJob> stage2Queue,
+        IJobQueue<MacEnrichmentJob> macEnrichmentQueue,
         IOptionsMonitor<EdgeControlPlaneOptions> optionsMonitor,
         ILogger<EdgeControlPlaneSyncService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _assessmentToolCatalog = assessmentToolCatalog;
+        _stage1Queue = stage1Queue;
+        _stage2Queue = stage2Queue;
+        _macEnrichmentQueue = macEnrichmentQueue;
         _optionsMonitor = optionsMonitor;
         _logger = logger;
     }
@@ -148,14 +163,252 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
             if (payload is { Count: > 0 })
             {
                 _logger.LogInformation(
-                    "Edge agent {AgentId} has {TaskCount} pending authorized tasks waiting for queue-bridge implementation.",
+                    "Edge agent {AgentId} has {TaskCount} pending authorized tasks to bridge locally.",
                     ResolveAgentId(options),
                     payload.Count);
+
+                await ProcessPendingTasksAsync(httpClient, options, payload.Results, cancellationToken);
             }
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "Fetching pending authorized tasks from mothership failed.");
+        }
+    }
+
+    private async Task ProcessPendingTasksAsync(
+        HttpClient httpClient,
+        EdgeControlPlaneOptions options,
+        IReadOnlyCollection<AuthorizedTaskDescriptor> tasks,
+        CancellationToken cancellationToken)
+    {
+        var localCapabilities = ResolveCapabilities(options)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var task in tasks.OrderByDescending(task => task.Priority).ThenBy(task => task.IssuedAt))
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (task.RequiredCapabilities.Count > 0 && !task.RequiredCapabilities.All(localCapabilities.Contains))
+            {
+                _logger.LogWarning(
+                    "Skipping authorized task {TaskId} because local capabilities do not satisfy all requirements.",
+                    task.TaskId);
+                continue;
+            }
+
+            var claim = await TryClaimTaskAsync(httpClient, options, task.TaskId, cancellationToken);
+            if (claim is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                var dispatchResult = await DispatchClaimedTaskAsync(claim, cancellationToken);
+                if (!dispatchResult.IsSuccess)
+                {
+                    await TryFailTaskAsync(httpClient, options, claim, dispatchResult.Reason, dispatchResult.RequeueRecommended, cancellationToken);
+                    continue;
+                }
+
+                await TryCompleteTaskAsync(httpClient, options, claim, dispatchResult.Reason, dispatchResult.MetadataJson, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Dispatching authorized task {TaskId} failed after claim.", claim.TaskId);
+                await TryFailTaskAsync(httpClient, options, claim, ex.Message, requeue: true, cancellationToken);
+            }
+        }
+    }
+
+    private async Task<EdgeTaskClaimResponse?> TryClaimTaskAsync(HttpClient httpClient, EdgeControlPlaneOptions options, string taskId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await httpClient.PostAsJsonAsync(
+                $"v1/edge-agents/{ResolveAgentId(options)}/tasks/{taskId}/claim",
+                new EdgeTaskClaimRequest { SiteId = ResolveSiteId(options) },
+                cancellationToken);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                _logger.LogDebug("Authorized task {TaskId} could not be claimed because it is no longer available.", taskId);
+                return null;
+            }
+
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<EdgeTaskClaimResponse>(cancellationToken: cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Claiming authorized task {TaskId} from mothership failed.", taskId);
+            return null;
+        }
+    }
+
+    private async Task TryCompleteTaskAsync(
+        HttpClient httpClient,
+        EdgeControlPlaneOptions options,
+        EdgeTaskClaimResponse claim,
+        string summary,
+        string? metadataJson,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await httpClient.PostAsJsonAsync(
+                $"v1/edge-agents/{ResolveAgentId(options)}/tasks/{claim.TaskId}/complete",
+                new EdgeTaskCompletionRequest
+                {
+                    LeaseToken = claim.LeaseToken,
+                    ResultStatus = "queued-local",
+                    Summary = summary,
+                    MetadataJson = metadataJson
+                },
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Completing authorized task {TaskId} on mothership failed.", claim.TaskId);
+        }
+    }
+
+    private async Task TryFailTaskAsync(
+        HttpClient httpClient,
+        EdgeControlPlaneOptions options,
+        EdgeTaskClaimResponse claim,
+        string errorMessage,
+        bool requeue,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await httpClient.PostAsJsonAsync(
+                $"v1/edge-agents/{ResolveAgentId(options)}/tasks/{claim.TaskId}/fail",
+                new EdgeTaskFailureRequest
+                {
+                    LeaseToken = claim.LeaseToken,
+                    ErrorMessage = errorMessage,
+                    Requeue = requeue,
+                    MetadataJson = JsonSerializer.Serialize(new { taskKind = claim.Task.TaskKind, claim.Task.RequiredCapabilities })
+                },
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Failing authorized task {TaskId} on mothership failed.", claim.TaskId);
+        }
+    }
+
+    private async Task<LocalDispatchResult> DispatchClaimedTaskAsync(EdgeTaskClaimResponse claim, CancellationToken cancellationToken)
+    {
+        var scope = AuthorizedTaskScopeEvaluator.Parse(claim.Task.ScopeJson);
+
+        switch (claim.Task.TaskKind.Trim().ToLowerInvariant())
+        {
+            case AuthorizedTaskKinds.Stage1Scan:
+            {
+                var job = DeserializePayload<Stage1ScanJob>(claim.Task.PayloadJson, claim.Task.TaskKind);
+                if (job is null)
+                {
+                    return LocalDispatchResult.Fail($"Payload for {claim.Task.TaskKind} could not be parsed.");
+                }
+
+                var scopeValidation = AuthorizedTaskScopeEvaluator.ValidateTarget(claim.Task.TaskKind, scope, job.TargetIp, job.PortsToScan);
+                if (!scopeValidation.IsAllowed)
+                {
+                    return LocalDispatchResult.Fail(scopeValidation.Reason);
+                }
+
+                if (string.IsNullOrWhiteSpace(job.BatchId))
+                {
+                    job.BatchId = $"edge-{claim.TaskId}";
+                }
+
+                await _stage1Queue.EnqueueAsync(
+                    job,
+                    idempotencyKey: $"edge-task:{claim.TaskId}",
+                    priority: claim.Task.Priority,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = job.TargetIp },
+                    cancellationToken: cancellationToken);
+
+                return LocalDispatchResult.Success(
+                    $"Queued {AuthorizedTaskKinds.Stage1Scan} for {job.TargetIp} ({job.PortsToScan.Count} ports).",
+                    JsonSerializer.Serialize(new { localQueue = nameof(Stage1ScanJob), job.TargetIp, job.BatchId, portCount = job.PortsToScan.Count }));
+            }
+            case AuthorizedTaskKinds.Stage2Enrichment:
+            {
+                var job = DeserializePayload<Stage2EnrichmentJob>(claim.Task.PayloadJson, claim.Task.TaskKind);
+                if (job is null || string.IsNullOrWhiteSpace(job.ObservationId))
+                {
+                    return LocalDispatchResult.Fail($"Payload for {claim.Task.TaskKind} is missing the required observation reference.");
+                }
+
+                var scopeValidation = AuthorizedTaskScopeEvaluator.ValidateTarget(claim.Task.TaskKind, scope, job.TargetIp);
+                if (!scopeValidation.IsAllowed)
+                {
+                    return LocalDispatchResult.Fail(scopeValidation.Reason);
+                }
+
+                await _stage2Queue.EnqueueAsync(
+                    job,
+                    idempotencyKey: $"edge-task:{claim.TaskId}",
+                    priority: claim.Task.Priority,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = job.TargetIp },
+                    cancellationToken: cancellationToken);
+
+                return LocalDispatchResult.Success(
+                    $"Queued {AuthorizedTaskKinds.Stage2Enrichment} for observation {job.ObservationId}.",
+                    JsonSerializer.Serialize(new { localQueue = nameof(Stage2EnrichmentJob), job.TargetIp, job.ObservationId, ruleCount = job.RuleIds.Count }));
+            }
+            case AuthorizedTaskKinds.MacEnrichment:
+            {
+                var job = DeserializePayload<MacEnrichmentJob>(claim.Task.PayloadJson, claim.Task.TaskKind);
+                if (job is null)
+                {
+                    return LocalDispatchResult.Fail($"Payload for {claim.Task.TaskKind} could not be parsed.");
+                }
+
+                var scopeValidation = AuthorizedTaskScopeEvaluator.ValidateTarget(claim.Task.TaskKind, scope, job.TargetIp);
+                if (!scopeValidation.IsAllowed)
+                {
+                    return LocalDispatchResult.Fail(scopeValidation.Reason);
+                }
+
+                await _macEnrichmentQueue.EnqueueAsync(
+                    job,
+                    idempotencyKey: $"edge-task:{claim.TaskId}",
+                    priority: claim.Task.Priority,
+                    enqueueOptions: new JobEnqueueOptions { ShardKey = job.TargetIp },
+                    cancellationToken: cancellationToken);
+
+                return LocalDispatchResult.Success(
+                    $"Queued {AuthorizedTaskKinds.MacEnrichment} for {job.TargetIp}.",
+                    JsonSerializer.Serialize(new { localQueue = nameof(MacEnrichmentJob), job.TargetIp }));
+            }
+            default:
+                return LocalDispatchResult.Fail($"Task kind '{claim.Task.TaskKind}' is not supported by the local bridge.");
+        }
+    }
+
+    private TPayload? DeserializePayload<TPayload>(string payloadJson, string taskKind)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<TPayload>(payloadJson, SerializerOptions);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Payload deserialization failed for authorized task kind {TaskKind}.", taskKind);
+            return default;
         }
     }
 
@@ -258,5 +511,19 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
     {
         public int Count { get; init; }
         public IReadOnlyCollection<AuthorizedTaskDescriptor> Results { get; init; } = Array.Empty<AuthorizedTaskDescriptor>();
+    }
+
+    private sealed record LocalDispatchResult
+    {
+        public bool IsSuccess { get; init; }
+        public string Reason { get; init; } = string.Empty;
+        public string? MetadataJson { get; init; }
+        public bool RequeueRecommended { get; init; }
+
+        public static LocalDispatchResult Success(string reason, string? metadataJson = null)
+            => new() { IsSuccess = true, Reason = reason, MetadataJson = metadataJson };
+
+        public static LocalDispatchResult Fail(string reason, bool requeueRecommended = false)
+            => new() { IsSuccess = false, Reason = reason, RequeueRecommended = requeueRecommended };
     }
 }

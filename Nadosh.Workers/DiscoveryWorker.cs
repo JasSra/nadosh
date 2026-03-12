@@ -164,6 +164,73 @@ public class DiscoveryWorker : BackgroundService
                 }, ct);
             }
 
+            // SNMP enumeration for port 161 (UDP) if discovered
+            var snmpObs = observations.FirstOrDefault(o => o.Port == 161 && o.Protocol == "UDP" && o.State == "open");
+            if (snmpObs != null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var snmpService = scopedProvider.GetRequiredService<Nadosh.Core.Services.SnmpScannerService>();
+                        var result = await snmpService.ScanAsync(job.TargetIp, 161);
+                        
+                        if (result != null && result.IsAccessible && result.DeviceInfo != null)
+                        {
+                            using var snmpScope = _serviceProvider.CreateScope();
+                            var snmpDb = snmpScope.ServiceProvider.GetRequiredService<NadoshDbContext>();
+                            
+                            var deviceInfo = result.DeviceInfo;
+                            
+                            // Update existing observation with SNMP device info
+                            snmpObs.ServiceName = "snmp";
+                            snmpObs.ServiceVersion = result.CommunityString; // Store working community string
+                            snmpObs.DeviceType = ExtractDeviceType(deviceInfo.SysDescr);
+                            snmpDb.Observations.Update(snmpObs);
+                            
+                            // Store as enrichment result
+                            var enrichment = new EnrichmentResult
+                            {
+                                ObservationId = snmpObs.Id,
+                                RuleId = "snmp-discovery",
+                                RuleVersion = "1.0",
+                                ResultStatus = "success",
+                                Confidence = 1.0,
+                                Tags = new[] { "snmp", "device-enumeration" },
+                                Summary = $"SNMP Device: {deviceInfo.SysName ?? "Unknown"} - {deviceInfo.SysDescr?.Substring(0, Math.Min(100, deviceInfo.SysDescr.Length)) ?? "No description"}",
+                                EvidenceJson = System.Text.Json.JsonSerializer.Serialize(new
+                                {
+                                    deviceInfo.SysDescr,
+                                    deviceInfo.SysName,
+                                    deviceInfo.SysUpTime,
+                                    deviceInfo.SysLocation,
+                                    deviceInfo.SysContact,
+                                    CommunityString = result.CommunityString
+                                }),
+                                ExecutedAt = DateTime.UtcNow
+                            };
+                            
+                            snmpDb.EnrichmentResults.Add(enrichment);
+                            await snmpDb.SaveChangesAsync(ct);
+                            
+                            _logger.LogInformation(
+                                "SNMP enumeration successful for {TargetIp}: {SysName} - {SysDescr}",
+                                job.TargetIp,
+                                deviceInfo.SysName ?? "Unknown",
+                                deviceInfo.SysDescr?.Substring(0, Math.Min(50, deviceInfo.SysDescr.Length)) ?? "N/A");
+                        }
+                        else
+                        {
+                            _logger.LogDebug("SNMP enumeration failed for {TargetIp} (no response or access denied)", job.TargetIp);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "SNMP enumeration failed for {Ip}", job.TargetIp);
+                    }
+                }, ct);
+            }
+
             // Funnel open ports to Tier 1 banner grab queue
             var openObs = observations.Where(o => o.State == "open").ToList();
             foreach (var obs in openObs)
@@ -315,5 +382,36 @@ public class DiscoveryWorker : BackgroundService
                ip.StartsWith("192.168.") ||
                ip.StartsWith("169.254.") ||
                (ip.StartsWith("172.") && int.TryParse(ip.Split('.')[1], out var second) && second >= 16 && second <= 31);
+    }
+
+    private static string ExtractDeviceType(string? sysDescr)
+    {
+        if (string.IsNullOrEmpty(sysDescr))
+            return "unknown";
+
+        var lower = sysDescr.ToLowerInvariant();
+        
+        if (lower.Contains("router") || lower.Contains("cisco") && lower.Contains("ios"))
+            return "router";
+        if (lower.Contains("switch") || lower.Contains("catalyst"))
+            return "switch";
+        if (lower.Contains("firewall") || lower.Contains("fortigate") || lower.Contains("palo alto"))
+            return "firewall";
+        if (lower.Contains("printer") || lower.Contains("hp ") || lower.Contains("lexmark"))
+            return "printer";
+        if (lower.Contains("camera") || lower.Contains("ip cam") || lower.Contains("axis"))
+            return "camera";
+        if (lower.Contains("nas") || lower.Contains("storage") || lower.Contains("synology") || lower.Contains("qnap"))
+            return "nas";
+        if (lower.Contains("linux") || lower.Contains("ubuntu") || lower.Contains("debian") || lower.Contains("redhat"))
+            return "linux-server";
+        if (lower.Contains("windows") || lower.Contains("microsoft"))
+            return "windows-server";
+        if (lower.Contains("access point") || lower.Contains("wireless") || lower.Contains("ubiquiti"))
+            return "access-point";
+        if (lower.Contains("phone") || lower.Contains("voip") || lower.Contains("pbx"))
+            return "voip-phone";
+        
+        return "network-device";
     }
 }
