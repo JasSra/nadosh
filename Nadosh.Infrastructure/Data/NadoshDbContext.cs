@@ -11,6 +11,7 @@ public class NadoshDbContext : DbContext
     public DbSet<EdgeSite> EdgeSites => Set<EdgeSite>();
     public DbSet<AuthorizedTask> AuthorizedTasks => Set<AuthorizedTask>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<AssessmentRun> AssessmentRuns => Set<AssessmentRun>();
     public DbSet<CertificateObservation> CertificateObservations => Set<CertificateObservation>();
     public DbSet<CurrentExposure> CurrentExposures => Set<CurrentExposure>();
     public DbSet<EnrichmentResult> EnrichmentResults => Set<EnrichmentResult>();
@@ -30,6 +31,30 @@ public class NadoshDbContext : DbContext
         {
             b.ToTable("AuditEvents");
             b.HasKey(e => e.Id);
+        });
+
+        modelBuilder.Entity<AssessmentRun>(b =>
+        {
+            b.ToTable("AssessmentRuns");
+            b.HasKey(e => e.RunId);
+            b.HasIndex(e => e.Status);
+            b.HasIndex(e => e.CreatedAt);
+            b.HasIndex(e => e.ToolId);
+            b.HasIndex(e => e.RequestedBy);
+            b.Property(e => e.RunId).HasMaxLength(128);
+            b.Property(e => e.ToolId).HasMaxLength(128);
+            b.Property(e => e.RequestedBy).HasMaxLength(256);
+            b.Property(e => e.TargetScope).HasMaxLength(512);
+            b.Property(e => e.ApprovalReference).HasMaxLength(128);
+            b.Property(e => e.ScopeKind)
+                .HasConversion<string>()
+                .HasMaxLength(64);
+            b.Property(e => e.Environment)
+                .HasConversion<string>()
+                .HasMaxLength(64);
+            b.Property(e => e.Status)
+                .HasConversion<string>()
+                .HasMaxLength(64);
         });
 
         modelBuilder.Entity<EdgeSite>(b =>

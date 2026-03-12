@@ -27,7 +27,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IObservationRepository, ObservationRepository>();
         services.AddScoped<ICurrentExposureRepository, CurrentExposureRepository>();
         services.AddScoped<IRuleConfigRepository, RuleConfigRepository>();
+        services.AddScoped<IAssessmentRunRepository, AssessmentRunRepository>();
         services.AddScoped<IAuditService, AuditService>();
+        // services.AddScoped<IAssessmentPolicyService, AssessmentPolicyService>();
+        // services.AddScoped<IAssessmentRunService, AssessmentRunService>();
         services.AddScoped<IEdgeControlPlaneService, EdgeControlPlaneService>();
         services.AddScoped<IObservationPipelineStateService, ObservationPipelineStateService>();
         services.AddScoped<IStage1DispatchStateService, Stage1DispatchStateService>();
