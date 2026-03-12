@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="Nadosh.Api/Nadosh.Api.csproj" />
+  <Project Path="Nadosh.Api.Tests/Nadosh.Api.Tests.csproj" />
   <Project Path="Nadosh.Core/Nadosh.Core.csproj" />
   <Project Path="Nadosh.Core.Tests/Nadosh.Core.Tests.csproj" />
   <Project Path="Nadosh.Infrastructure/Nadosh.Infrastructure.csproj" />

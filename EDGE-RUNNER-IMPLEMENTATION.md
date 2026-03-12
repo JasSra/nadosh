@@ -26,10 +26,14 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
   - Canonical task kind identifiers for the edge queue bridge.
 - `Nadosh.Core/Models/AuthorizedTaskScope.cs`
   - Minimal scope contract for allowed targets, CIDRs, and ports.
+- `Nadosh.Core/Models/EdgeTaskExecutionRecord.cs`
+  - Durable local record of claimed authorized tasks, execution state, and upload retry metadata.
 - `Nadosh.Core/Models/EdgeControlPlaneContracts.cs`
   - API/worker request-response payloads for enroll, heartbeat, task polling, task claim, completion, and failure.
 - `Nadosh.Core/Services/AuthorizedTaskScopeEvaluator.cs`
   - Shared preflight scope validation for authorized task targets and ports.
+- `Nadosh.Core/Interfaces/IEdgeTaskExecutionTracker.cs`
+  - Abstraction for local execution buffering and upload retry tracking.
 
 ### Infrastructure and persistence
 
@@ -37,12 +41,16 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
   - Writes audit entries to `AuditEvents`.
 - `Nadosh.Infrastructure/Data/EdgeControlPlaneService.cs`
   - Upserts sites/agents, records heartbeat state, and returns pending authorized tasks.
+- `Nadosh.Infrastructure/Data/EdgeTaskExecutionTracker.cs`
+  - Persists local task execution state and upload retry metadata.
 - `Nadosh.Infrastructure/Data/NadoshDbContext.cs`
-  - Added `EdgeSites`, `EdgeAgents`, and `AuthorizedTasks` with EF configuration.
+  - Added `EdgeSites`, `EdgeAgents`, `AuthorizedTasks`, and `EdgeTaskExecutionRecords` with EF configuration.
 - `Nadosh.Infrastructure/InfrastructureServiceCollectionExtensions.cs`
-  - Registered edge control-plane services and `EdgeControlPlane` options.
+  - Registered edge control-plane services, execution tracker, shared catalog, and `EdgeControlPlane` options.
 - `Nadosh.Infrastructure/Migrations/*AddEdgeControlPlaneScaffolding*`
   - Schema migration for new edge control-plane tables.
+- `Nadosh.Infrastructure/Migrations/*AddEdgeTaskExecutionBuffering*`
+  - Schema migration for the durable local execution buffer.
 
 ### API surface
 
@@ -64,9 +72,15 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
   - Claims tasks with lease tokens before local dispatch.
   - Validates authorized target scope before queue injection.
   - Bridges supported task kinds into existing local worker queues.
-  - Reports local queue acceptance back to the mothership.
+  - Persists claimed tasks into the local execution buffer instead of immediately finalizing them centrally.
   - Advertises both worker-role capabilities and approved assessment tool ids.
   - Emits platform metadata for `win-x64` and `linux-x64` shipping targets.
+- `Nadosh.Workers/Edge/EdgeTaskUploadService.cs`
+  - Retries final completion/failure uploads from the local buffer back to the mothership.
+- `Nadosh.Workers/DiscoveryWorker.cs`
+- `Nadosh.Workers/Stage2Worker.cs`
+- `Nadosh.Workers/MacEnrichmentWorker.cs`
+  - Revalidate authorized scope during execution and mark durable completion/failure results locally.
 - `Nadosh.Workers/appsettings.json`
 - `Nadosh.Workers/appsettings.Development.json`
 - `Nadosh.Api/appsettings.Development.json`
@@ -85,23 +99,24 @@ Platform metadata is detected at runtime via `RuntimeInformation` and sent durin
 
 - Strong agent trust (mTLS, signed enrollment, per-agent key rotation)
 - Final result upload, resumable sync, or local evidence buffering
-- Site-level scope enforcement inside each worker stage beyond bridge-time preflight
+- Full evidence payload synchronization beyond completion/failure summaries
 - Remote cancellation / kill-switch endpoints
 - Operator approval workflow and issuance UX
+- Lease renewal / recovery for tasks that remain claimed if an edge node dies mid-execution
 
 ## Supported bridge task kinds in this slice
 
-- `nadosh.stage1.scan` -> local `Stage1ScanJob`
-- `nadosh.stage2.enrichment` -> local `Stage2EnrichmentJob`
-- `nadosh.mac-enrichment` -> local `MacEnrichmentJob`
+- `nadosh.stage1.scan` -> local `Stage1ScanJob` -> final completion/failure upload after discovery finishes
+- `nadosh.stage2.enrichment` -> local `Stage2EnrichmentJob` -> final completion/failure upload after enrichment finishes
+- `nadosh.mac-enrichment` -> local `MacEnrichmentJob` -> final completion/failure upload after enrichment finishes
 
-For now, task completion at the mothership means **accepted into the edge-local queue**. It does not yet represent final worker execution or evidence upload.
+Task completion at the mothership now means **the local worker finished and the edge uploader successfully sent the final completion/failure state**. The current upload payload is still summary/metadata oriented rather than a full evidence bundle.
 
 ## Next recommended slices
 
 1. Extend task coverage from queue-entry task kinds to higher-level approved tool workflows.
-2. Push scope/approval enforcement deeper into worker execution so each stage revalidates task context before live network action.
-3. Add result upload contracts plus local durable buffering for disconnected/unstable egress.
+2. Add richer result/evidence upload contracts so central workflows receive normalized observations and evidence references.
+3. Add lease renewal / abandoned-claim recovery for long-running or interrupted tasks.
 4. Replace shared API-key trust with agent-specific credentials and revocation.
 5. Add API/infrastructure tests around claim, lease validation, requeue, and task visibility.
 
@@ -111,6 +126,7 @@ For now, task completion at the mothership means **accepted into the edge-local 
 - `dotnet build Nadosh.Workers/Nadosh.Workers.csproj -v minimal`
 - `dotnet ef migrations add AddEdgeControlPlaneScaffolding --project Nadosh.Infrastructure/Nadosh.Infrastructure.csproj --startup-project Nadosh.Api/Nadosh.Api.csproj --context NadoshDbContext`
 - `dotnet test Nadosh.Core.Tests/Nadosh.Core.Tests.csproj -v minimal`
+- `dotnet ef migrations add AddEdgeTaskExecutionBuffering --project Nadosh.Infrastructure/Nadosh.Infrastructure.csproj --startup-project Nadosh.Api/Nadosh.Api.csproj --context NadoshDbContext`
 
 ## Notes
 

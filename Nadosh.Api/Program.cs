@@ -98,3 +98,5 @@ app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthC
     Predicate = _ => false // Liveness: no dependency checks, just process-alive
 });
 app.Run();
+
+public partial class Program;

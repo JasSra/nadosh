@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Nadosh.Core.Configuration;
 using Nadosh.Core.Interfaces;
 using Nadosh.Core.Scanning;
+using Nadosh.Core.Services;
 using Nadosh.Infrastructure.Queue;
 using StackExchange.Redis;
 
@@ -27,11 +28,15 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IObservationRepository, ObservationRepository>();
         services.AddScoped<ICurrentExposureRepository, CurrentExposureRepository>();
         services.AddScoped<IRuleConfigRepository, RuleConfigRepository>();
+        services.AddSingleton<IAssessmentToolCatalog, DefaultAssessmentToolCatalog>();
         services.AddScoped<IAssessmentRunRepository, AssessmentRunRepository>();
+        services.AddScoped<IAssessmentEvidenceService, AssessmentEvidenceService>();
         services.AddScoped<IAuditService, AuditService>();
-        // services.AddScoped<IAssessmentPolicyService, AssessmentPolicyService>();
-        // services.AddScoped<IAssessmentRunService, AssessmentRunService>();
+        services.AddScoped<IAssessmentPolicyService, AssessmentPolicyService>();
+        services.AddScoped<IAssessmentRunService, AssessmentRunService>();
+        services.AddScoped<IMicrosoftAgentAssessmentAdapter, MicrosoftAgentAssessmentAdapter>();
         services.AddScoped<IEdgeControlPlaneService, EdgeControlPlaneService>();
+        services.AddScoped<IEdgeTaskExecutionTracker, EdgeTaskExecutionTracker>();
         services.AddScoped<IObservationPipelineStateService, ObservationPipelineStateService>();
         services.AddScoped<IStage1DispatchStateService, Stage1DispatchStateService>();
         services.AddScoped<IObservationHandoffDispatchService, ObservationHandoffDispatchService>();

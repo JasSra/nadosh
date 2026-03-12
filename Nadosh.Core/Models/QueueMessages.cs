@@ -5,6 +5,9 @@ public class Stage1ScanJob
     public string BatchId { get; set; } = string.Empty;
     public string TargetIp { get; set; } = string.Empty;
     public List<int> PortsToScan { get; set; } = new();
+    public string? AuthorizedTaskId { get; set; }
+    public string? AuthorizedScopeJson { get; set; }
+    public string? ApprovalReference { get; set; }
 }
 
 public class ClassificationJob
@@ -17,6 +20,9 @@ public class Stage2EnrichmentJob
     public string ObservationId { get; set; } = string.Empty;
     public string TargetIp { get; set; } = string.Empty;
     public List<string> RuleIds { get; set; } = new();
+    public string? AuthorizedTaskId { get; set; }
+    public string? AuthorizedScopeJson { get; set; }
+    public string? ApprovalReference { get; set; }
 }
 
 // ── New Tier-based job messages ──
@@ -54,4 +60,7 @@ public class MacEnrichmentJob
 {
     public string TargetIp { get; set; } = string.Empty;
     public string MacAddress { get; set; } = string.Empty;
+    public string? AuthorizedTaskId { get; set; }
+    public string? AuthorizedScopeJson { get; set; }
+    public string? ApprovalReference { get; set; }
 }

@@ -1,6 +1,7 @@
 using Nadosh.Core.Interfaces;
 using Nadosh.Core.Configuration;
 using Nadosh.Core.Models;
+using Nadosh.Core.Services;
 using Nadosh.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Nadosh.Workers.Rules;
@@ -51,6 +52,7 @@ public class Stage2Worker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing Stage 2 enrichment job");
+                await TrackAuthorizedTaskFailureAsync(scope.ServiceProvider, msg.Payload, ex, stoppingToken);
                 await HandleFailureAsync(msg, scope.ServiceProvider, queue, queuePolicy, ex, stoppingToken);
             }
         }
@@ -59,6 +61,7 @@ public class Stage2Worker : BackgroundService
     private async Task ProcessJobAsync(JobQueueMessage<Stage2EnrichmentJob> message, IServiceProvider scopedProvider, CancellationToken ct)
     {
         var job = message.Payload;
+        await ValidateAuthorizedTaskScopeAsync(job, scopedProvider, ct);
         _logger.LogInformation($"Running enrichments for {job.TargetIp} - Rules: {string.Join(", ", job.RuleIds)}");
 
         var db = scopedProvider.GetRequiredService<NadoshDbContext>();
@@ -243,6 +246,8 @@ public class Stage2Worker : BackgroundService
                 observationId,
                 WorkerId,
                 ct);
+
+            await TrackAuthorizedTaskSuccessAsync(scopedProvider, job, ct);
         }
     }
 
@@ -316,5 +321,48 @@ public class Stage2Worker : BackgroundService
             retryDelay.TotalSeconds);
 
         await queue.RejectAsync(message, reenqueue: true, reenqueueDelay: retryDelay, ct);
+    }
+
+    private static async Task ValidateAuthorizedTaskScopeAsync(Stage2EnrichmentJob job, IServiceProvider scopedProvider, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var scope = AuthorizedTaskScopeEvaluator.Parse(job.AuthorizedScopeJson);
+        var validation = AuthorizedTaskScopeEvaluator.ValidateTarget(AuthorizedTaskKinds.Stage2Enrichment, scope, job.TargetIp);
+        if (!validation.IsAllowed)
+        {
+            var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+            await tracker.MarkFailedAsync(job.AuthorizedTaskId, validation.Reason, metadataJson: job.ApprovalReference, cancellationToken: ct);
+            throw new InvalidOperationException(validation.Reason);
+        }
+    }
+
+    private static async Task TrackAuthorizedTaskSuccessAsync(IServiceProvider scopedProvider, Stage2EnrichmentJob job, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+        await tracker.MarkCompletedAsync(
+            job.AuthorizedTaskId,
+            $"Stage 2 enrichment completed for observation {job.ObservationId}.",
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new { job.ObservationId, job.TargetIp, ruleCount = job.RuleIds.Count }),
+            cancellationToken: ct);
+    }
+
+    private static async Task TrackAuthorizedTaskFailureAsync(IServiceProvider scopedProvider, Stage2EnrichmentJob job, Exception exception, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+        await tracker.MarkFailedAsync(job.AuthorizedTaskId, exception.Message, requeueRecommended: false, metadataJson: job.ApprovalReference, cancellationToken: ct);
     }
 }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using Nadosh.Core.Interfaces;
 using Nadosh.Core.Models;
+using Nadosh.Core.Services;
 using Nadosh.Infrastructure.Data;
 using Nadosh.Infrastructure.Scanning;
 using Microsoft.EntityFrameworkCore;
@@ -81,6 +82,7 @@ public class DiscoveryWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing discovery job for {TargetIp}", msg.Payload.TargetIp);
+                await TrackAuthorizedTaskFailureAsync(scope.ServiceProvider, msg.Payload, ex, stoppingToken);
                 await QueueProcessingUtilities.RejectWithBackoffOrDeadLetterAsync(queue, msg, ex, _logger, queuePolicy, stoppingToken);
             }
         }
@@ -88,6 +90,8 @@ public class DiscoveryWorker : BackgroundService
 
     private async Task ProcessJobAsync(Stage1ScanJob job, IServiceProvider scopedProvider, CancellationToken ct)
     {
+        await ValidateAuthorizedTaskScopeAsync(job, scopedProvider, ct);
+
         var dispatchStateService = scopedProvider.GetRequiredService<IStage1DispatchStateService>();
         var handoffDispatchService = scopedProvider.GetRequiredService<IObservationHandoffDispatchService>();
         var startResult = await dispatchStateService.StartAsync(
@@ -295,6 +299,8 @@ public class DiscoveryWorker : BackgroundService
                 observations.Count(o => o.State == "closed"),
                 observations.Count(o => o.State == "filtered"),
                 sw.ElapsedMilliseconds);
+
+            await TrackAuthorizedTaskSuccessAsync(scopedProvider, job, observations, ct);
         }
         catch (Exception ex)
         {
@@ -382,6 +388,53 @@ public class DiscoveryWorker : BackgroundService
                ip.StartsWith("192.168.") ||
                ip.StartsWith("169.254.") ||
                (ip.StartsWith("172.") && int.TryParse(ip.Split('.')[1], out var second) && second >= 16 && second <= 31);
+    }
+
+    private static async Task ValidateAuthorizedTaskScopeAsync(Stage1ScanJob job, IServiceProvider scopedProvider, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var scope = AuthorizedTaskScopeEvaluator.Parse(job.AuthorizedScopeJson);
+        var validation = AuthorizedTaskScopeEvaluator.ValidateTarget(AuthorizedTaskKinds.Stage1Scan, scope, job.TargetIp, job.PortsToScan);
+        if (!validation.IsAllowed)
+        {
+            var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+            await tracker.MarkFailedAsync(job.AuthorizedTaskId, validation.Reason, metadataJson: job.ApprovalReference, cancellationToken: ct);
+            throw new InvalidOperationException(validation.Reason);
+        }
+    }
+
+    private static async Task TrackAuthorizedTaskSuccessAsync(IServiceProvider scopedProvider, Stage1ScanJob job, IEnumerable<Observation> observations, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+        var openCount = observations.Count(observation => observation.State == "open");
+        var closedCount = observations.Count(observation => observation.State == "closed");
+        var filteredCount = observations.Count(observation => observation.State == "filtered");
+
+        await tracker.MarkCompletedAsync(
+            job.AuthorizedTaskId,
+            $"Discovery completed for {job.TargetIp} with {openCount} open, {closedCount} closed, and {filteredCount} filtered ports.",
+            metadataJson: System.Text.Json.JsonSerializer.Serialize(new { job.BatchId, job.TargetIp, openCount, closedCount, filteredCount }),
+            cancellationToken: ct);
+    }
+
+    private static async Task TrackAuthorizedTaskFailureAsync(IServiceProvider scopedProvider, Stage1ScanJob job, Exception exception, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.AuthorizedTaskId))
+        {
+            return;
+        }
+
+        var tracker = scopedProvider.GetRequiredService<IEdgeTaskExecutionTracker>();
+        await tracker.MarkFailedAsync(job.AuthorizedTaskId, exception.Message, requeueRecommended: false, metadataJson: job.ApprovalReference, cancellationToken: ct);
     }
 
     private static string ExtractDeviceType(string? sysDescr)

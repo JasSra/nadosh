@@ -12,13 +12,19 @@ public sealed class AssessmentRunsController : ControllerBase
 {
     private readonly IAssessmentRunService _assessmentRunService;
     private readonly IAssessmentRunRepository _assessmentRunRepository;
+    private readonly IAssessmentEvidenceService _assessmentEvidenceService;
+    private readonly IMicrosoftAgentAssessmentAdapter _microsoftAgentAssessmentAdapter;
 
     public AssessmentRunsController(
         IAssessmentRunService assessmentRunService,
-        IAssessmentRunRepository assessmentRunRepository)
+        IAssessmentRunRepository assessmentRunRepository,
+        IAssessmentEvidenceService assessmentEvidenceService,
+        IMicrosoftAgentAssessmentAdapter microsoftAgentAssessmentAdapter)
     {
         _assessmentRunService = assessmentRunService;
         _assessmentRunRepository = assessmentRunRepository;
+        _assessmentEvidenceService = assessmentEvidenceService;
+        _microsoftAgentAssessmentAdapter = microsoftAgentAssessmentAdapter;
     }
 
     /// <summary>
@@ -67,6 +73,40 @@ public sealed class AssessmentRunsController : ControllerBase
         }
 
         return Ok(Map(run));
+    }
+
+    /// <summary>
+    /// Builds an evidence bundle for a previously submitted assessment run.
+    /// </summary>
+    [HttpGet("{runId}/evidence")]
+    [ProducesResponseType(typeof(AssessmentEvidenceBundle), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetEvidence(string runId, CancellationToken cancellationToken)
+    {
+        var bundle = await _assessmentEvidenceService.BuildAsync(runId, cancellationToken);
+        if (bundle is null)
+        {
+            return NotFound(new { Message = $"Assessment run '{runId}' was not found." });
+        }
+
+        return Ok(bundle);
+    }
+
+    /// <summary>
+    /// Builds a Microsoft Agent Framework-ready context for a previously submitted assessment run.
+    /// </summary>
+    [HttpGet("{runId}/agent-context")]
+    [ProducesResponseType(typeof(MicrosoftAgentAssessmentContext), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAgentContext(string runId, CancellationToken cancellationToken)
+    {
+        var context = await _microsoftAgentAssessmentAdapter.BuildContextAsync(runId, cancellationToken);
+        if (context is null)
+        {
+            return NotFound(new { Message = $"Assessment run '{runId}' was not found." });
+        }
+
+        return Ok(context);
     }
 
     /// <summary>

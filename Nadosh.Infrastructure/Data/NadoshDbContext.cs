@@ -9,6 +9,7 @@ public class NadoshDbContext : DbContext
 
     public DbSet<EdgeAgent> EdgeAgents => Set<EdgeAgent>();
     public DbSet<EdgeSite> EdgeSites => Set<EdgeSite>();
+    public DbSet<EdgeTaskExecutionRecord> EdgeTaskExecutionRecords => Set<EdgeTaskExecutionRecord>();
     public DbSet<AuthorizedTask> AuthorizedTasks => Set<AuthorizedTask>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<AssessmentRun> AssessmentRuns => Set<AssessmentRun>();
@@ -85,6 +86,23 @@ public class NadoshDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.SiteId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EdgeTaskExecutionRecord>(b =>
+        {
+            b.ToTable("EdgeTaskExecutionRecords");
+            b.HasKey(e => e.Id);
+            b.HasIndex(e => e.AuthorizedTaskId).IsUnique();
+            b.HasIndex(e => e.Status);
+            b.HasIndex(e => e.NextUploadAttemptAt);
+            b.Property(e => e.AuthorizedTaskId).HasMaxLength(128);
+            b.Property(e => e.SiteId).HasMaxLength(128);
+            b.Property(e => e.AgentId).HasMaxLength(128);
+            b.Property(e => e.TaskKind).HasMaxLength(128);
+            b.Property(e => e.LeaseToken).HasMaxLength(128);
+            b.Property(e => e.Status)
+                .HasConversion<string>()
+                .HasMaxLength(32);
         });
 
         modelBuilder.Entity<AuthorizedTask>(b =>

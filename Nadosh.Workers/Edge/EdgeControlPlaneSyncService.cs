@@ -34,6 +34,7 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IAssessmentToolCatalog _assessmentToolCatalog;
+    private readonly IEdgeTaskExecutionTracker _executionTracker;
     private readonly IJobQueue<Stage1ScanJob> _stage1Queue;
     private readonly IJobQueue<Stage2EnrichmentJob> _stage2Queue;
     private readonly IJobQueue<MacEnrichmentJob> _macEnrichmentQueue;
@@ -43,6 +44,7 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
     public EdgeControlPlaneSyncService(
         IHttpClientFactory httpClientFactory,
         IAssessmentToolCatalog assessmentToolCatalog,
+        IEdgeTaskExecutionTracker executionTracker,
         IJobQueue<Stage1ScanJob> stage1Queue,
         IJobQueue<Stage2EnrichmentJob> stage2Queue,
         IJobQueue<MacEnrichmentJob> macEnrichmentQueue,
@@ -51,6 +53,7 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
     {
         _httpClientFactory = httpClientFactory;
         _assessmentToolCatalog = assessmentToolCatalog;
+        _executionTracker = executionTracker;
         _stage1Queue = stage1Queue;
         _stage2Queue = stage2Queue;
         _macEnrichmentQueue = macEnrichmentQueue;
@@ -211,16 +214,32 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
                 var dispatchResult = await DispatchClaimedTaskAsync(claim, cancellationToken);
                 if (!dispatchResult.IsSuccess)
                 {
-                    await TryFailTaskAsync(httpClient, options, claim, dispatchResult.Reason, dispatchResult.RequeueRecommended, cancellationToken);
+                    await _executionTracker.RecordClaimFailureAsync(
+                        claim,
+                        dispatchResult.Reason,
+                        dispatchResult.RequeueRecommended,
+                        dispatchResult.MetadataJson,
+                        cancellationToken);
                     continue;
                 }
 
-                await TryCompleteTaskAsync(httpClient, options, claim, dispatchResult.Reason, dispatchResult.MetadataJson, cancellationToken);
+                await _executionTracker.RecordQueuedAsync(
+                    claim,
+                    dispatchResult.LocalQueueName ?? claim.Task.TaskKind,
+                    dispatchResult.LocalJobReference ?? claim.Task.TaskId,
+                    dispatchResult.Reason,
+                    dispatchResult.MetadataJson,
+                    cancellationToken);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning(ex, "Dispatching authorized task {TaskId} failed after claim.", claim.TaskId);
-                await TryFailTaskAsync(httpClient, options, claim, ex.Message, requeue: true, cancellationToken);
+                await _executionTracker.RecordClaimFailureAsync(
+                    claim,
+                    ex.Message,
+                    requeueRecommended: true,
+                    metadataJson: JsonSerializer.Serialize(new { claim.Task.TaskKind }),
+                    cancellationToken: cancellationToken);
             }
         }
     }
@@ -250,64 +269,6 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
         }
     }
 
-    private async Task TryCompleteTaskAsync(
-        HttpClient httpClient,
-        EdgeControlPlaneOptions options,
-        EdgeTaskClaimResponse claim,
-        string summary,
-        string? metadataJson,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var response = await httpClient.PostAsJsonAsync(
-                $"v1/edge-agents/{ResolveAgentId(options)}/tasks/{claim.TaskId}/complete",
-                new EdgeTaskCompletionRequest
-                {
-                    LeaseToken = claim.LeaseToken,
-                    ResultStatus = "queued-local",
-                    Summary = summary,
-                    MetadataJson = metadataJson
-                },
-                cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "Completing authorized task {TaskId} on mothership failed.", claim.TaskId);
-        }
-    }
-
-    private async Task TryFailTaskAsync(
-        HttpClient httpClient,
-        EdgeControlPlaneOptions options,
-        EdgeTaskClaimResponse claim,
-        string errorMessage,
-        bool requeue,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var response = await httpClient.PostAsJsonAsync(
-                $"v1/edge-agents/{ResolveAgentId(options)}/tasks/{claim.TaskId}/fail",
-                new EdgeTaskFailureRequest
-                {
-                    LeaseToken = claim.LeaseToken,
-                    ErrorMessage = errorMessage,
-                    Requeue = requeue,
-                    MetadataJson = JsonSerializer.Serialize(new { taskKind = claim.Task.TaskKind, claim.Task.RequiredCapabilities })
-                },
-                cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "Failing authorized task {TaskId} on mothership failed.", claim.TaskId);
-        }
-    }
-
     private async Task<LocalDispatchResult> DispatchClaimedTaskAsync(EdgeTaskClaimResponse claim, CancellationToken cancellationToken)
     {
         var scope = AuthorizedTaskScopeEvaluator.Parse(claim.Task.ScopeJson);
@@ -333,6 +294,10 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
                     job.BatchId = $"edge-{claim.TaskId}";
                 }
 
+                job.AuthorizedTaskId = claim.TaskId;
+                job.AuthorizedScopeJson = claim.Task.ScopeJson;
+                job.ApprovalReference = claim.Task.ApprovalReference;
+
                 await _stage1Queue.EnqueueAsync(
                     job,
                     idempotencyKey: $"edge-task:{claim.TaskId}",
@@ -342,7 +307,9 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
 
                 return LocalDispatchResult.Success(
                     $"Queued {AuthorizedTaskKinds.Stage1Scan} for {job.TargetIp} ({job.PortsToScan.Count} ports).",
-                    JsonSerializer.Serialize(new { localQueue = nameof(Stage1ScanJob), job.TargetIp, job.BatchId, portCount = job.PortsToScan.Count }));
+                    JsonSerializer.Serialize(new { localQueue = nameof(Stage1ScanJob), job.TargetIp, job.BatchId, portCount = job.PortsToScan.Count }),
+                    localQueueName: nameof(Stage1ScanJob),
+                    localJobReference: job.BatchId);
             }
             case AuthorizedTaskKinds.Stage2Enrichment:
             {
@@ -358,6 +325,10 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
                     return LocalDispatchResult.Fail(scopeValidation.Reason);
                 }
 
+                job.AuthorizedTaskId = claim.TaskId;
+                job.AuthorizedScopeJson = claim.Task.ScopeJson;
+                job.ApprovalReference = claim.Task.ApprovalReference;
+
                 await _stage2Queue.EnqueueAsync(
                     job,
                     idempotencyKey: $"edge-task:{claim.TaskId}",
@@ -367,7 +338,9 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
 
                 return LocalDispatchResult.Success(
                     $"Queued {AuthorizedTaskKinds.Stage2Enrichment} for observation {job.ObservationId}.",
-                    JsonSerializer.Serialize(new { localQueue = nameof(Stage2EnrichmentJob), job.TargetIp, job.ObservationId, ruleCount = job.RuleIds.Count }));
+                    JsonSerializer.Serialize(new { localQueue = nameof(Stage2EnrichmentJob), job.TargetIp, job.ObservationId, ruleCount = job.RuleIds.Count }),
+                    localQueueName: nameof(Stage2EnrichmentJob),
+                    localJobReference: job.ObservationId);
             }
             case AuthorizedTaskKinds.MacEnrichment:
             {
@@ -383,6 +356,10 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
                     return LocalDispatchResult.Fail(scopeValidation.Reason);
                 }
 
+                job.AuthorizedTaskId = claim.TaskId;
+                job.AuthorizedScopeJson = claim.Task.ScopeJson;
+                job.ApprovalReference = claim.Task.ApprovalReference;
+
                 await _macEnrichmentQueue.EnqueueAsync(
                     job,
                     idempotencyKey: $"edge-task:{claim.TaskId}",
@@ -392,7 +369,9 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
 
                 return LocalDispatchResult.Success(
                     $"Queued {AuthorizedTaskKinds.MacEnrichment} for {job.TargetIp}.",
-                    JsonSerializer.Serialize(new { localQueue = nameof(MacEnrichmentJob), job.TargetIp }));
+                    JsonSerializer.Serialize(new { localQueue = nameof(MacEnrichmentJob), job.TargetIp }),
+                    localQueueName: nameof(MacEnrichmentJob),
+                    localJobReference: job.TargetIp);
             }
             default:
                 return LocalDispatchResult.Fail($"Task kind '{claim.Task.TaskKind}' is not supported by the local bridge.");
@@ -518,10 +497,12 @@ public sealed class EdgeControlPlaneSyncService : BackgroundService
         public bool IsSuccess { get; init; }
         public string Reason { get; init; } = string.Empty;
         public string? MetadataJson { get; init; }
+        public string? LocalQueueName { get; init; }
+        public string? LocalJobReference { get; init; }
         public bool RequeueRecommended { get; init; }
 
-        public static LocalDispatchResult Success(string reason, string? metadataJson = null)
-            => new() { IsSuccess = true, Reason = reason, MetadataJson = metadataJson };
+        public static LocalDispatchResult Success(string reason, string? metadataJson = null, string? localQueueName = null, string? localJobReference = null)
+            => new() { IsSuccess = true, Reason = reason, MetadataJson = metadataJson, LocalQueueName = localQueueName, LocalJobReference = localJobReference };
 
         public static LocalDispatchResult Fail(string reason, bool requeueRecommended = false)
             => new() { IsSuccess = false, Reason = reason, RequeueRecommended = requeueRecommended };

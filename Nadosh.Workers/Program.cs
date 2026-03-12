@@ -12,11 +12,11 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddNadoshInfrastructure(builder.Configuration);
 builder.Services.AddHttpClient(); // For webhook notifications
 builder.Services.AddSingleton<IRuleExecutionService, RuleExecutionService>();
-builder.Services.AddSingleton<IAssessmentToolCatalog, DefaultAssessmentToolCatalog>();
 
 if (builder.Configuration.GetValue<bool>("EdgeControlPlane:Enabled"))
 {
     builder.Services.AddHostedService<EdgeControlPlaneSyncService>();
+    builder.Services.AddHostedService<EdgeTaskUploadService>();
 }
 
 // CVE enrichment service
@@ -28,7 +28,7 @@ builder.Services.AddScoped<MitreAttackMappingService>();
 builder.Services.AddScoped<SnmpScannerService>();
 
 // Role-based worker selection via WORKER_ROLE env var.
-// Values: "all" (default), "discovery", "banner", "fingerprint", "classifier", "scheduler"
+// Values: "all" (default), "discovery", "banner", "fingerprint", "classifier", "scheduler", "assessment-runs"
 // Multiple roles can be comma-separated: "discovery,banner"
 var workerRole = Environment.GetEnvironmentVariable("WORKER_ROLE")?.ToLowerInvariant() ?? "all";
 var roles = workerRole.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet();
@@ -67,6 +67,9 @@ if (ShouldRun("cve-enrichment"))
 
 if (ShouldRun("threat-scoring"))
     builder.Services.AddHostedService<ThreatScoringWorker>();
+
+if (ShouldRun("assessment-runs"))
+    builder.Services.AddHostedService<AssessmentRunWorker>();
 
 // Keep Stage2Worker for legacy enrichment rules (still fed by classifier)
 if (ShouldRun("enrichment") || ShouldRun("all"))
