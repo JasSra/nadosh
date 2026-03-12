@@ -37,6 +37,11 @@ public class Observation
     public string? MacAddress { get; set; }
     public string? MacVendor { get; set; }
     public string? DeviceType { get; set; }
+    
+    // ── CVE enrichment fields ──
+    public string? CveIds { get; set; } // Comma-separated list of CVE IDs
+    public double? HighestCvssScore { get; set; }
+    public string? CveSeverity { get; set; } // Highest CVE severity
 }
 
 /// <summary>

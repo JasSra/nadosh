@@ -134,7 +134,7 @@ services:
       dockerfile: Nadosh.Workers/Dockerfile
     environment:
       - DOTNET_ENVIRONMENT=Development
-      - WORKER_ROLE=geo-enrichment,change-detector
+      - WORKER_ROLE=geo-enrichment,change-detector,cve-enrichment
       - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
       - ConnectionStrings__Redis=redis:6379,abortConnect=false
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317

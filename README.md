@@ -14,6 +14,7 @@
 - **Timeline & Change Detection**: Full historical tracking with automatic change detection
 - **Advanced Query DSL**: Search exposures with boolean operators (`service:ssh AND port:22`)
 - **ASN/Geo Enrichment**: Automatic IP-to-location and organization mapping
+- **CVE Vulnerability Detection**: Automatic enrichment with known CVEs from NVD database
 - **Webhook Notifications**: Real-time alerts for network changes
 - **Modern Web Dashboard**: Built with Alpine.js and Chart.js
 
@@ -166,6 +167,29 @@ GET /v1/timeline/services/{serviceName}
 GET /v1/stats/summary
 ```
 
+#### CVE Vulnerabilities
+```bash
+# Get exposures with CVEs
+GET /v1/cve/exposures?severity=high&minCvssScore=7.0
+
+# Get CVE statistics
+GET /v1/cve/stats
+
+# Get CVEs for specific exposure
+GET /v1/cve/{ip}/{port}
+
+# Get CVE details by ID
+GET /v1/cve/details/CVE-2024-12345
+
+# Search for CVEs
+POST /v1/cve/search
+{
+  "product": "openssh",
+  "vendor": "openbsd",
+  "version": "7.4"
+}
+```
+
 ### Authentication
 
 All API requests require an API key:
@@ -304,10 +328,10 @@ Tested on: AMD Ryzen 7 / 16GB RAM / Docker Desktop
 - [x] ASN/Geo enrichment
 - [x] Webhook notifications
 - [x] Web dashboard UI
+- [x] Integration with CVE databases
 
 ### Planned 🚧
 - [ ] Machine learning for threat scoring
-- [ ] Integration with CVE databases
 - [ ] SNMP discovery support
 - [ ] Active vulnerability scanning
 - [ ] Multi-tenant support

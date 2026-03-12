@@ -10,6 +10,9 @@ builder.Services.AddNadoshInfrastructure(builder.Configuration);
 builder.Services.AddHttpClient(); // For webhook notifications
 builder.Services.AddSingleton<IRuleExecutionService, RuleExecutionService>();
 
+// CVE enrichment service
+builder.Services.AddHttpClient<Nadosh.Core.Services.CveEnrichmentService>();
+
 // Role-based worker selection via WORKER_ROLE env var.
 // Values: "all" (default), "discovery", "banner", "fingerprint", "classifier", "scheduler"
 // Multiple roles can be comma-separated: "discovery,banner"
@@ -44,6 +47,9 @@ if (ShouldRun("change-detector"))
 
 if (ShouldRun("mac-enrichment"))
     builder.Services.AddHostedService<MacEnrichmentWorker>();
+
+if (ShouldRun("cve-enrichment"))
+    builder.Services.AddHostedService<CveEnrichmentWorker>();
 
 // Keep Stage2Worker for legacy enrichment rules (still fed by classifier)
 if (ShouldRun("enrichment") || ShouldRun("all"))

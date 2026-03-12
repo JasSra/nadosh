@@ -38,6 +38,9 @@ builder.Services.AddOpenApi();
 builder.Services.AddControllers();
 builder.Services.AddNadoshInfrastructure(builder.Configuration);
 
+// CVE enrichment service
+builder.Services.AddHttpClient<Nadosh.Core.Services.CveEnrichmentService>();
+
 // Add CORS for frontend
 builder.Services.AddCors(options =>
 {

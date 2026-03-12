@@ -136,7 +136,11 @@
                         </button>
                         <button @click="currentView = 'search'; queryDsl = 'severity:high'; searchExposures()" 
                                 class="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
-                            High Severity
+                            🚨 High Severity
+                        </button>
+                        <button @click="currentView = 'cves'; loadCveExposures()" 
+                                class="w-full bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            🛡️ CVE Exposures
                         </button>
                     </div>
                 </div>
@@ -257,6 +261,96 @@
                             </div>
                         </template>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CVE Exposures View -->
+        <div x-show="currentView === 'cves'" x-cloak class="mb-8">
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-bold text-white">CVE Vulnerability Exposures</h2>
+                    <button @click="loadCveExposures()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm">
+                        Refresh
+                    </button>
+                </div>
+
+                <!-- CVE Stats -->
+                <div x-show="cveStats" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-gray-900 rounded-lg p-4">
+                        <div class="text-gray-400 text-sm">Total Exposures with CVEs</div>
+                        <div class="text-2xl font-bold text-white mt-2" x-text="cveStats?.exposuresWithCves || 0"></div>
+                        <div class="text-gray-500 text-xs mt-1" x-text="cveStats?.coveragePercentage ? `${cveStats.coveragePercentage}% of total` : ''"></div>
+                    </div>
+                    <div class="bg-gray-900 rounded-lg p-4">
+                        <div class="text-gray-400 text-sm">Severity Breakdown</div>
+                        <div class="flex flex-wrap gap-2 mt-2">
+                            <template x-for="sev in cveStats?.severityCounts || []" :key="sev.severity">
+                                <span class="px-2 py-1 rounded text-xs"
+                                      :class="{
+                                          'bg-red-600 text-white': sev.severity === 'high' || sev.severity === 'critical',
+                                          'bg-yellow-600 text-white': sev.severity === 'medium',
+                                          'bg-blue-600 text-white': sev.severity === 'low'
+                                      }">
+                                    <span x-text="sev.severity"></span>: <span x-text="sev.count"></span>
+                                </span>
+                            </template>
+                        </div>
+                    </div>
+                    <div class="bg-gray-900 rounded-lg p-4">
+                        <div class="text-gray-400 text-sm">Highest CVSS Score</div>
+                        <div class="text-2xl font-bold text-red-400 mt-2" x-text="cveStats?.top10ByCvss?.[0]?.highestCvssScore?.toFixed(1) || 'N/A'"></div>
+                    </div>
+                </div>
+
+                <!-- CVE Exposures List -->
+                <div class="space-y-3 max-h-[600px] overflow-y-auto">
+                    <template x-for="exposure in cveExposures" :key="exposure.targetId + exposure.port">
+                        <div class="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:border-red-500 transition-colors">
+                            <div class="flex items-start justify-between mb-3">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-3 mb-2">
+                                        <span class="text-white font-mono font-semibold" x-text="exposure.targetId"></span>
+                                        <span class="text-gray-400 text-sm">:</span>
+                                        <span class="text-purple-400 font-mono" x-text="exposure.port"></span>
+                                        <span class="px-2 py-1 rounded text-xs text-white bg-blue-600" x-text="exposure.classification"></span>
+                                    </div>
+                                    <div class="flex items-center space-x-4 text-sm">
+                                        <span class="text-gray-400">
+                                            <span class="text-gray-500">CVEs:</span> 
+                                            <span class="text-orange-400 font-semibold" x-text="exposure.cveCount"></span>
+                                        </span>
+                                        <span class="text-gray-400">
+                                            <span class="text-gray-500">CVSS:</span> 
+                                            <span :class="{
+                                                'text-red-400': exposure.highestCvssScore >= 7.0,
+                                                'text-yellow-400': exposure.highestCvssScore >= 4.0 && exposure.highestCvssScore < 7.0,
+                                                'text-green-400': exposure.highestCvssScore < 4.0
+                                            }" x-text="exposure.highestCvssScore?.toFixed(1)"></span>
+                                        </span>
+                                        <span :class="{
+                                            'text-red-400 font-semibold': exposure.cveSeverity === 'high' || exposure.cveSeverity === 'critical',
+                                            'text-yellow-400': exposure.cveSeverity === 'medium',
+                                            'text-blue-400': exposure.cveSeverity === 'low'
+                                        }" x-text="exposure.cveSeverity?.toUpperCase()"></span>
+                                    </div>
+                                </div>
+                                <div class="text-right text-xs text-gray-500">
+                                    <div x-text="exposure.cveLastChecked ? new Date(exposure.cveLastChecked).toLocaleString() : 'Not checked'"></div>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-2 mt-2">
+                                <template x-for="cveId in exposure.cveIds?.split(',').slice(0, 5) || []" :key="cveId">
+                                    <a :href="`https://nvd.nist.gov/vuln/detail/${cveId.trim()}`" 
+                                       target="_blank"
+                                       class="px-2 py-1 bg-red-900 hover:bg-red-800 text-red-200 rounded text-xs font-mono transition-colors"
+                                       x-text="cveId.trim()">
+                                    </a>
+                                </template>
+                                <span x-show="exposure.cveCount > 5" class="px-2 py-1 bg-gray-700 text-gray-400 rounded text-xs" x-text="`+${exposure.cveCount - 5} more`"></span>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
@@ -420,6 +514,8 @@
                 recentChanges: [],
                 portsChart: null,
                 severityChart: null,
+                cveExposures: [],
+                cveStats: null,
 
                 async init() {
                     await this.loadStats();
@@ -543,6 +639,27 @@
                         this.recentChanges = data.changes || [];
                     } catch (error) {
                         console.error('Failed to load changes:', error);
+                    }
+                },
+
+                async loadCveExposures() {
+                    try {
+                        // Load CVE statistics
+                        const statsResponse = await fetch(`${API_URL}/v1/cve/stats`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        this.cveStats = await statsResponse.json();
+
+                        // Load CVE exposures
+                        const exposuresResponse = await fetch(`${API_URL}/v1/cve/exposures?take=50`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        const data = await exposuresResponse.json();
+                        this.cveExposures = data.exposures || data.Exposures || [];
+                    } catch (error) {
+                        console.error('Failed to load CVE exposures:', error);
+                        this.cveExposures = [];
+                        this.cveStats = null;
                     }
                 },
 
