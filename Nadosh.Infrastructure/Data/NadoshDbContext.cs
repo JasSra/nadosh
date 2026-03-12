@@ -111,10 +111,13 @@ public class NadoshDbContext : DbContext
             b.HasKey(e => e.TaskId);
             b.HasIndex(e => new { e.SiteId, e.Status });
             b.HasIndex(e => e.AgentId);
+            b.HasIndex(e => e.ClaimedByAgentId);
             b.HasIndex(e => e.ExpiresAt);
+            b.HasIndex(e => e.LeaseExpiresAt);
             b.Property(e => e.TaskId).HasMaxLength(128);
             b.Property(e => e.SiteId).HasMaxLength(128);
             b.Property(e => e.AgentId).HasMaxLength(128);
+            b.Property(e => e.ClaimedByAgentId).HasMaxLength(128);
             b.Property(e => e.TaskKind).HasMaxLength(128);
             b.Property(e => e.Status)
                 .HasConversion<string>()

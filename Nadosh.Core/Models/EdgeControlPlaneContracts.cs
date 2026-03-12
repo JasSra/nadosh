@@ -40,6 +40,7 @@ public sealed record EdgeHeartbeatResponse
     public string AgentId { get; init; } = string.Empty;
     public int HeartbeatIntervalSeconds { get; init; }
     public int PendingTaskCount { get; init; }
+    public int RenewedLeaseCount { get; init; }
     public DateTime ServerTimeUtc { get; init; }
 }
 
@@ -55,6 +56,7 @@ public sealed record EdgeTaskClaimResponse
     public string SiteId { get; init; } = string.Empty;
     public string LeaseToken { get; init; } = string.Empty;
     public DateTime ClaimedAt { get; init; }
+    public DateTime LeaseExpiresAt { get; init; }
     public AuthorizedTaskDescriptor Task { get; init; } = new();
 }
 

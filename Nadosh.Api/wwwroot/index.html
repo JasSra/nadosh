@@ -146,6 +146,10 @@
                                 class="w-full bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
                             🛡️ CVE Exposures
                         </button>
+                        <button @click="currentView = 'analytics'; loadAnalytics()" 
+                                class="w-full bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg transition-colors text-left">
+                            📊 Analytics & Trends
+                        </button>
                     </div>
                 </div>
 
@@ -479,6 +483,193 @@
             </div>
         </div>
 
+        <!-- Analytics & Trends Section -->
+        <div x-show="currentView === 'analytics'" class="space-y-6 mb-8">
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-bold text-white">📊 Analytics & Trends</h2>
+                    <button @click="loadAnalytics()" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm">
+                        🔄 Refresh
+                    </button>
+                </div>
+
+                <!-- Port Statistics -->
+                <div class="mb-6">
+                    <h3 class="text-xl font-bold text-white mb-4">Port Distribution</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Total Exposures</div>
+                            <div class="text-2xl font-bold text-white mt-2" x-text="portStats?.totalExposures || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Open Ports</div>
+                            <div class="text-2xl font-bold text-green-400 mt-2" x-text="portStats?.totalOpenPorts || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Closed Ports</div>
+                            <div class="text-2xl font-bold text-red-400 mt-2" x-text="portStats?.totalClosedPorts || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Filtered Ports</div>
+                            <div class="text-2xl font-bold text-yellow-400 mt-2" x-text="portStats?.totalFilteredPorts || 0"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <!-- Top Ports -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Top 20 Ports</h4>
+                            <div class="space-y-2 max-h-96 overflow-y-auto">
+                                <template x-for="(port, index) in portStats?.topPorts || []" :key="port.port">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <div class="flex items-center space-x-2">
+                                            <span class="text-gray-500 w-6" x-text="`#${index + 1}`"></span>
+                                            <span class="text-purple-400 font-mono" x-text="port.port"></span>
+                                            <span class="text-gray-400" x-text="port.commonService || 'unknown'"></span>
+                                        </div>
+                                        <span class="text-white font-semibold" x-text="port.count"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Service Distribution -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Service Type Distribution</h4>
+                            <div class="space-y-2 max-h-96 overflow-y-auto">
+                                <template x-for="svc in portStats?.serviceDistribution || []" :key="svc.serviceType">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <span class="text-gray-300" x-text="svc.serviceType"></span>
+                                        <span class="text-white font-semibold" x-text="svc.count"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trend Statistics -->
+                <div class="mb-6" x-show="trendStats">
+                    <h3 class="text-xl font-bold text-white mb-4">Trends (Last <span x-text="trendStats?.periodDays"></span> Days)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">New Discoveries</div>
+                            <div class="text-2xl font-bold text-green-400 mt-2" x-text="trendStats?.newDiscoveries || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Total Changes</div>
+                            <div class="text-2xl font-bold text-blue-400 mt-2" x-text="trendStats?.totalChanges || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Newly Opened</div>
+                            <div class="text-2xl font-bold text-green-400 mt-2" x-text="trendStats?.newlyOpened || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Newly Closed</div>
+                            <div class="text-2xl font-bold text-red-400 mt-2" x-text="trendStats?.newlyClosed || 0"></div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <!-- Daily Trend -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Daily Discovery Trend</h4>
+                            <div class="space-y-2">
+                                <template x-for="day in trendStats?.dailyTrend || []" :key="day.date">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <span class="text-gray-400" x-text="new Date(day.date).toLocaleDateString()"></span>
+                                        <span class="text-white font-semibold" x-text="day.count"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Growing Services -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Fastest Growing Services</h4>
+                            <div class="space-y-2">
+                                <template x-for="svc in trendStats?.growingServices || []" :key="svc.serviceType">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <span class="text-gray-300" x-text="svc.serviceType"></span>
+                                        <div class="flex items-center space-x-2">
+                                            <span class="text-green-400" x-text="`+${svc.newExposures}`"></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Threat Statistics -->
+                <div x-show="threatStatsSummary">
+                    <h3 class="text-xl font-bold text-white mb-4">Threat Overview</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Total Scored</div>
+                            <div class="text-2xl font-bold text-white mt-2" x-text="threatStatsSummary?.totalScored || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Average Score</div>
+                            <div class="text-2xl font-bold text-purple-400 mt-2" x-text="threatStatsSummary?.avgScore?.toFixed(1) || 0"></div>
+                        </div>
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <div class="text-gray-400 text-sm">Generated</div>
+                            <div class="text-sm text-gray-400 mt-2" x-text="threatStatsSummary?.generatedAt ? new Date(threatStatsSummary.generatedAt).toLocaleString() : 'N/A'"></div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                        <!-- Score Ranges -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Score Distribution</h4>
+                            <div class="space-y-2">
+                                <template x-for="range in threatStatsSummary?.scoreRanges || []" :key="range.range">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <span class="text-gray-300" x-text="range.range"></span>
+                                        <span class="text-white font-semibold" x-text="range.count"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Top CVEs -->
+                        <div class="bg-gray-900 rounded-lg p-4">
+                            <h4 class="text-lg font-bold text-white mb-3">Top CVEs in High-Risk Exposures</h4>
+                            <div class="space-y-2 max-h-64 overflow-y-auto">
+                                <template x-for="cve in threatStatsSummary?.topCves || []" :key="cve.cveId">
+                                    <div class="flex items-center justify-between text-sm">
+                                        <a :href="`https://nvd.nist.gov/vuln/detail/${cve.cveId}`" 
+                                           target="_blank"
+                                           class="text-red-400 hover:text-red-300 font-mono" 
+                                           x-text="cve.cveId"></a>
+                                        <div class="flex items-center space-x-2">
+                                            <span class="text-white font-semibold" x-text="cve.count"></span>
+                                            <span class="text-orange-400 text-xs" x-text="`CVSS ${cve.maxSeverity?.toFixed(1)}`"></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- High Risk Countries -->
+                    <div class="bg-gray-900 rounded-lg p-4">
+                        <h4 class="text-lg font-bold text-white mb-3">🌍 High-Risk Countries</h4>
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                            <template x-for="country in threatStatsSummary?.highRiskCountries || []" :key="country.country">
+                                <div class="bg-gray-800 rounded p-3 text-center">
+                                    <div class="text-xl font-bold text-white" x-text="country.country"></div>
+                                    <div class="text-sm text-red-400" x-text="`${country.highRiskCount} threats`"></div>
+                                    <div class="text-xs text-gray-500" x-text="`Avg: ${country.avgScore?.toFixed(1)}`"></div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Timeline & Changes -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
@@ -643,6 +834,9 @@
                 threatStats: null,
                 mitreCoverage: null,
                 topThreats: [],
+                portStats: null,
+                trendStats: null,
+                threatStatsSummary: null,
 
                 async init() {
                     await this.loadStats();
@@ -815,6 +1009,33 @@
                         this.threatStats = null;
                         this.mitreCoverage = null;
                         this.topThreats = [];
+                    }
+                },
+
+                async loadAnalytics() {
+                    try {
+                        // Load port statistics
+                        const portStatsResponse = await fetch(`${API_URL}/v1/stats/ports`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        this.portStats = await portStatsResponse.json();
+
+                        // Load trend statistics
+                        const trendStatsResponse = await fetch(`${API_URL}/v1/stats/trends?days=30`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        this.trendStats = await trendStatsResponse.json();
+
+                        // Load threat statistics summary
+                        const threatStatsResponse = await fetch(`${API_URL}/v1/stats/threats`, {
+                            headers: { 'X-API-Key': API_KEY }
+                        });
+                        this.threatStatsSummary = await threatStatsResponse.json();
+                    } catch (error) {
+                        console.error('Failed to load analytics:', error);
+                        this.portStats = null;
+                        this.trendStats = null;
+                        this.threatStatsSummary = null;
                     }
                 },
 

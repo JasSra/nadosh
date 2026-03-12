@@ -5,6 +5,7 @@ public class AuthorizedTask
     public string TaskId { get; set; } = Guid.NewGuid().ToString("n");
     public string SiteId { get; set; } = string.Empty;
     public string? AgentId { get; set; }
+    public string? ClaimedByAgentId { get; set; }
     public string TaskKind { get; set; } = string.Empty;
     public string PayloadJson { get; set; } = "{}";
     public string ScopeJson { get; set; } = "{}";
@@ -19,6 +20,7 @@ public class AuthorizedTask
     public DateTime? NotBefore { get; set; }
     public DateTime? ExpiresAt { get; set; }
     public DateTime? ClaimedAt { get; set; }
+    public DateTime? LeaseExpiresAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public string? ResultSummaryJson { get; set; }
 }

@@ -1,6 +1,6 @@
 # Edge Runner Implementation Progress
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
 
 ## Goal
 
@@ -11,7 +11,7 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 ### Core contracts and models
 
 - `Nadosh.Core/Configuration/EdgeControlPlaneOptions.cs`
-  - Worker/API configuration for outbound mothership sync.
+  - Worker/API configuration for outbound mothership sync, including task lease duration defaults.
 - `Nadosh.Core/Interfaces/IAuditService.cs`
   - Shared audit writer abstraction for control-plane events.
 - `Nadosh.Core/Interfaces/IEdgeControlPlaneService.cs`
@@ -21,7 +21,7 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 - `Nadosh.Core/Models/EdgeAgent.cs`
   - Durable agent identity, platform metadata, status, and advertised capabilities.
 - `Nadosh.Core/Models/AuthorizedTask.cs`
-  - Site/agent-scoped authorized task envelope with lease/expiry fields.
+  - Site/agent-scoped authorized task envelope with claim ownership and lease expiry fields.
 - `Nadosh.Core/Models/AuthorizedTaskKinds.cs`
   - Canonical task kind identifiers for the edge queue bridge.
 - `Nadosh.Core/Models/AuthorizedTaskScope.cs`
@@ -29,7 +29,7 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 - `Nadosh.Core/Models/EdgeTaskExecutionRecord.cs`
   - Durable local record of claimed authorized tasks, execution state, and upload retry metadata.
 - `Nadosh.Core/Models/EdgeControlPlaneContracts.cs`
-  - API/worker request-response payloads for enroll, heartbeat, task polling, task claim, completion, and failure.
+  - API/worker request-response payloads for enroll, heartbeat, task polling, task claim, completion, and failure, including lease expiry metadata.
 - `Nadosh.Core/Services/AuthorizedTaskScopeEvaluator.cs`
   - Shared preflight scope validation for authorized task targets and ports.
 - `Nadosh.Core/Interfaces/IEdgeTaskExecutionTracker.cs`
@@ -40,7 +40,7 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 - `Nadosh.Infrastructure/Data/AuditService.cs`
   - Writes audit entries to `AuditEvents`.
 - `Nadosh.Infrastructure/Data/EdgeControlPlaneService.cs`
-  - Upserts sites/agents, records heartbeat state, and returns pending authorized tasks.
+  - Upserts sites/agents, renews active leases on heartbeat, recovers expired claimed tasks, and returns pending authorized tasks.
 - `Nadosh.Infrastructure/Data/EdgeTaskExecutionTracker.cs`
   - Persists local task execution state and upload retry metadata.
 - `Nadosh.Infrastructure/Data/NadoshDbContext.cs`
@@ -51,6 +51,8 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
   - Schema migration for new edge control-plane tables.
 - `Nadosh.Infrastructure/Migrations/*AddEdgeTaskExecutionBuffering*`
   - Schema migration for the durable local execution buffer.
+- `Nadosh.Infrastructure/Migrations/*AddEdgeTaskLeaseRenewalRecovery*`
+  - Schema migration for `ClaimedByAgentId` and `LeaseExpiresAt` on authorized tasks.
 
 ### API surface
 
@@ -66,10 +68,13 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 
 - `Nadosh.Workers/Program.cs`
   - Starts the outbound sync hosted service when `EdgeControlPlane:Enabled=true`.
+- `Nadosh.Workers/Nadosh.Workers.csproj`
+  - Added EF Core design-time tooling so the worker host can act as a migration startup project.
 - `Nadosh.Workers/Edge/EdgeControlPlaneSyncService.cs`
   - Performs outbound enrollment and heartbeat.
   - Polls pending authorized tasks.
   - Claims tasks with lease tokens before local dispatch.
+  - Relies on heartbeat-driven lease renewal to keep central claims alive while local execution/upload is still pending.
   - Validates authorized target scope before queue injection.
   - Bridges supported task kinds into existing local worker queues.
   - Persists claimed tasks into the local execution buffer instead of immediately finalizing them centrally.
@@ -84,7 +89,7 @@ Add a cross-platform edge-runner foundation so Nadosh can coordinate approved in
 - `Nadosh.Workers/appsettings.json`
 - `Nadosh.Workers/appsettings.Development.json`
 - `Nadosh.Api/appsettings.Development.json`
-  - Added initial config scaffolding for local development.
+  - Added initial config scaffolding for local development, including task lease duration settings.
 
 ## Cross-platform note
 
@@ -102,7 +107,6 @@ Platform metadata is detected at runtime via `RuntimeInformation` and sent durin
 - Full evidence payload synchronization beyond completion/failure summaries
 - Remote cancellation / kill-switch endpoints
 - Operator approval workflow and issuance UX
-- Lease renewal / recovery for tasks that remain claimed if an edge node dies mid-execution
 
 ## Supported bridge task kinds in this slice
 
@@ -112,22 +116,28 @@ Platform metadata is detected at runtime via `RuntimeInformation` and sent durin
 
 Task completion at the mothership now means **the local worker finished and the edge uploader successfully sent the final completion/failure state**. The current upload payload is still summary/metadata oriented rather than a full evidence bundle.
 
+Heartbeats now also extend the lease for all still-claimed tasks owned by that edge agent, and the control plane automatically requeues or fails tasks whose claim lease expires before upload/finish is reported.
+
 ## Next recommended slices
 
 1. Extend task coverage from queue-entry task kinds to higher-level approved tool workflows.
 2. Add richer result/evidence upload contracts so central workflows receive normalized observations and evidence references.
-3. Add lease renewal / abandoned-claim recovery for long-running or interrupted tasks.
-4. Replace shared API-key trust with agent-specific credentials and revocation.
-5. Add API/infrastructure tests around claim, lease validation, requeue, and task visibility.
+3. Replace shared API-key trust with agent-specific credentials and revocation.
+4. Add remote cancellation / kill-switch flows that cooperate with the lease model.
+5. Expand API/infrastructure coverage around task issuance and end-to-end upload reconciliation.
 
 ## Validation completed
 
-- `dotnet build Nadosh.Api/Nadosh.Api.csproj -v minimal`
 - `dotnet build Nadosh.Workers/Nadosh.Workers.csproj -v minimal`
 - `dotnet ef migrations add AddEdgeControlPlaneScaffolding --project Nadosh.Infrastructure/Nadosh.Infrastructure.csproj --startup-project Nadosh.Api/Nadosh.Api.csproj --context NadoshDbContext`
 - `dotnet test Nadosh.Core.Tests/Nadosh.Core.Tests.csproj -v minimal`
 - `dotnet ef migrations add AddEdgeTaskExecutionBuffering --project Nadosh.Infrastructure/Nadosh.Infrastructure.csproj --startup-project Nadosh.Api/Nadosh.Api.csproj --context NadoshDbContext`
+- `dotnet test Nadosh.Infrastructure.Tests/Nadosh.Infrastructure.Tests.csproj -v minimal`
+- `dotnet build Nadosh.Workers/Nadosh.Workers.csproj -v minimal`
+- `dotnet ef migrations add AddEdgeTaskLeaseRenewalRecovery --project Nadosh.Infrastructure/Nadosh.Infrastructure.csproj --startup-project Nadosh.Workers/Nadosh.Workers.csproj --context NadoshDbContext`
 
 ## Notes
 
 This implementation intentionally starts with orchestration and safety plumbing rather than direct task execution. The edge runner can now identify itself, report the same approved tool surface across Windows and Linux builds, and receive mothership-managed authorized task metadata without changing the existing worker execution pipeline yet.
+
+During this slice, `Nadosh.Api` did not produce a clean build because `StatsController` references threat-intel sets that are not yet wired into `NadoshDbContext`. That issue predates this lease-lifecycle change, so the lease migration was generated through the worker startup project instead.

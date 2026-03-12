@@ -12,6 +12,7 @@ public sealed class EdgeControlPlaneOptions
     public string DisplayName { get; set; } = string.Empty;
     public string ApiKey { get; set; } = string.Empty;
     public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public int TaskLeaseDurationSeconds { get; set; } = 300;
     public bool FetchPendingTasks { get; set; } = true;
     public List<string> Capabilities { get; set; } = new();
 }
