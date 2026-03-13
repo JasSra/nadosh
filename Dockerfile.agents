@@ -1,0 +1,98 @@
+# Stage 1: Build .NET application
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Copy project files
+COPY ["Nadosh.Agents/Nadosh.Agents.csproj", "Nadosh.Agents/"]
+COPY ["Nadosh.Core/Nadosh.Core.csproj", "Nadosh.Core/"]
+COPY ["Nadosh.Infrastructure/Nadosh.Infrastructure.csproj", "Nadosh.Infrastructure/"]
+
+# Restore dependencies
+RUN dotnet restore "Nadosh.Agents/Nadosh.Agents.csproj"
+
+# Copy source code
+COPY Nadosh.Agents/ Nadosh.Agents/
+COPY Nadosh.Core/ Nadosh.Core/
+COPY Nadosh.Infrastructure/ Nadosh.Infrastructure/
+
+# Build
+WORKDIR /src/Nadosh.Agents
+RUN dotnet build "Nadosh.Agents.csproj" -c Release -o /app/build
+
+# Publish
+RUN dotnet publish "Nadosh.Agents.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+# Stage 2: Runtime with Kali tools
+FROM kalilinux/kali-rolling:latest
+
+# Install .NET 10 runtime with signature bypass (GPG SHA1 deprecation workaround)
+RUN apt-get update && \
+    apt-get install -y wget apt-transport-https ca-certificates gnupg && \
+    wget https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
+    dpkg -i packages-microsoft-prod.deb && \
+    rm packages-microsoft-prod.deb && \
+    apt-get update -o Acquire::AllowInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated dotnet-runtime-10.0 aspnetcore-runtime-10.0 && \
+    rm -f /etc/apt/sources.list.d/microsoft-prod.list
+
+# Install essential Kali pentest tools
+RUN apt-get update && apt-get install -y \
+    nmap \
+    nikto \
+    sqlmap \
+    nuclei \
+    ffuf \
+    gobuster \
+    masscan \
+    whatweb \
+    enum4linux \
+    sslscan \
+    testssl.sh \
+    wfuzz \
+    dirb \
+    netcat-traditional \
+    tcpdump \
+    wireshark-common \
+    hydra \
+    jq \
+    curl \
+    wget \
+    git \
+    python3 \
+    python3-pip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional Python tools (use --break-system-packages for Kali)
+RUN pip3 install --no-cache-dir --break-system-packages \
+    impacket \
+    requests \
+    beautifulsoup4
+
+# Create non-root user for running agents
+RUN useradd -m -s /bin/bash nadosh-agent && \
+    mkdir -p /app /data/evidence && \
+    chown -R nadosh-agent:nadosh-agent /app /data
+
+WORKDIR /app
+
+# Copy published .NET app
+COPY --from=build /app/publish .
+
+# Copy tool capability cache (optional)
+RUN mkdir -p /app/tool-cache
+
+USER nadosh-agent
+
+# Environment variables
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD dotnet --version || exit 1
+
+ENTRYPOINT ["dotnet", "Nadosh.Agents.dll"]

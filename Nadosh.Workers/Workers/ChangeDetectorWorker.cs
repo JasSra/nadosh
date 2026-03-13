@@ -2,8 +2,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Nadosh.Infrastructure.Data;
+using Nadosh.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace Nadosh.Workers.Workers;
 
@@ -162,22 +164,40 @@ public class ChangeDetectorWorker : BackgroundService
 
         foreach (var webhookUrl in webhookUrls)
         {
+            var delivery = new WebhookDelivery
+            {
+                EventType = "ChangeNotification",
+                Url = webhookUrl,
+                Payload = JsonSerializer.Serialize(payload),
+                SentAt = DateTime.UtcNow
+            };
+
             try
             {
                 var response = await _httpClient.PostAsJsonAsync(webhookUrl, payload, ct);
+                delivery.HttpStatusCode = (int)response.StatusCode;
+                delivery.Success = response.IsSuccessStatusCode;
+
                 if (response.IsSuccessStatusCode)
                 {
                     _logger.LogInformation("Webhook notification sent successfully to {Url}", webhookUrl);
                 }
                 else
                 {
+                    delivery.ErrorMessage = $"HTTP {response.StatusCode}";
                     _logger.LogWarning("Webhook notification failed to {Url}: {StatusCode}", webhookUrl, response.StatusCode);
                 }
             }
             catch (Exception ex)
             {
+                delivery.Success = false;
+                delivery.ErrorMessage = ex.Message;
                 _logger.LogError(ex, "Failed to send webhook to {Url}", webhookUrl);
             }
+
+            db.WebhookDeliveries.Add(delivery);
         }
+
+        await db.SaveChangesAsync(ct);
     }
 }

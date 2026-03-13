@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 
@@ -10,6 +11,16 @@ public class ApiKeyAuthAttribute : Attribute, IAsyncActionFilter
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        // Check if the endpoint allows anonymous access
+        var hasAllowAnonymous = context.ActionDescriptor.EndpointMetadata
+            .Any(m => m is AllowAnonymousAttribute);
+
+        if (hasAllowAnonymous)
+        {
+            await next();
+            return;
+        }
+
         if (!context.HttpContext.Request.Headers.TryGetValue(ApiKeyHeaderName, out var extractedApiKey))
         {
             context.Result = new UnauthorizedObjectResult(new { Message = "API Key is missing." });

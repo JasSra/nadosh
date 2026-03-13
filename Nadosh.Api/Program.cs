@@ -57,11 +57,12 @@ builder.Services.AddCors(options =>
 });
 var app = builder.Build();
 
+// Epic 3: Expose OpenAPI/Swagger JSON in all environments
+app.MapOpenApi();
+
 // Seed data in dev environment
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
-
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<NadoshDbContext>();
     

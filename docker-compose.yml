@@ -134,7 +134,7 @@ services:
       dockerfile: Nadosh.Workers/Dockerfile
     environment:
       - DOTNET_ENVIRONMENT=Development
-      - WORKER_ROLE=geo-enrichment,change-detector,cve-enrichment,threat-scoring
+      - WORKER_ROLE=geo-enrichment,change-detector,cve-enrichment,threat-scoring,mac-enrichment
       - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
       - ConnectionStrings__Redis=redis:6379,abortConnect=false
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -145,7 +145,36 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - ./scripts/manuf:/app/manuf
+
+  # ── AI Agent Assessment Workers (Kali + LLM orchestration) ──
+  agent-workers:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=nadosh;Username=nadosh;Password=nadosh_password
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OpenAI__Model=gpt-4o
+      - AssessmentAgent__MaxIterationsPerPhase=10
+      - AssessmentAgent__CommandTimeoutSeconds=300
+      - AssessmentAgent__EnableScopeValidation=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - agent_evidence:/data/evidence
+    # Run with NET_RAW capability for raw socket access (nmap, masscan)
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
 
 volumes:
   postgres_data:
   redis_data:
+  agent_evidence:

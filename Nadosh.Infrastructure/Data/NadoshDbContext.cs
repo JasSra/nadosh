@@ -23,6 +23,7 @@ public class NadoshDbContext : DbContext
     public DbSet<Stage1Dispatch> Stage1Dispatches => Set<Stage1Dispatch>();
     public DbSet<SuppressionRule> SuppressionRules => Set<SuppressionRule>();
     public DbSet<Target> Targets => Set<Target>();
+    public DbSet<WebhookDelivery> WebhookDeliveries => Set<WebhookDelivery>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -224,6 +225,17 @@ public class NadoshDbContext : DbContext
             b.Property(e => e.Ip).HasMaxLength(45);
             b.HasIndex(e => e.NextScheduled);
             b.PrimitiveCollection(e => e.OwnershipTags).HasColumnType("text[]");
+        });
+
+        modelBuilder.Entity<WebhookDelivery>(b =>
+        {
+            b.ToTable("WebhookDeliveries");
+            b.HasKey(e => e.Id);
+            b.HasIndex(e => e.SentAt);
+            b.HasIndex(e => e.EventType);
+            b.HasIndex(e => e.Success);
+            b.Property(e => e.EventType).HasMaxLength(128);
+            b.Property(e => e.Url).HasMaxLength(512);
         });
     }
 }

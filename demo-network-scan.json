@@ -1,0 +1,12 @@
+{
+  "toolId": "asset.discovery.network.reconcile",
+  "requestedBy": "demo-user",
+  "targetScope": "192.168.4.0/24",
+  "scopeTags": ["authorized-scope", "inventory"],
+  "environment": 1,
+  "parametersJson": "{\"targetScope\":\"192.168.4.0/24\",\"scanProfile\":\"standard\"}",
+  "metadata": {
+    "demo": "Network Discovery Scanner (Shodan-like)",
+    "description": "Discovers all active hosts and services on 192.168.4.0/24 network"
+  }
+}

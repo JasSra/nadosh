@@ -192,106 +192,114 @@ public class StatsController : ControllerBase
             scanActivity
         });
     }
-    [HttpGet("threats")]
-    public async Task<IActionResult> GetThreatStatistics(CancellationToken ct)
-    {
-        var db = _redis.GetDatabase();
-        var cacheKey = "stats:threats";
+    // [HttpGet("threats")]
+    // public async Task<IActionResult> GetThreatStatistics(CancellationToken ct)
+    // {
+    //     // TODO: ThreatScores, MitreAttackMappings, CveFindings DbSets not yet implemented
+    //     return Ok(new { message = "Threat scoring not yet implemented" });
+    // }
 
-        // Try cache first
-        var cached = await db.StringGetAsync(cacheKey);
-        if (cached.HasValue)
-        {
-            _logger.LogInformation("Threat stats cache hit");
-            return Ok(JsonSerializer.Deserialize<object>(cached.ToString()));
-        }
+    // Temporarily disabled - requires ThreatScores DbSet
+    // [HttpGet("threats")]
+    // public async Task<IActionResult> GetThreatStatistics_DISABLED(CancellationToken ct)
+    // {
+    //     var db = _redis.GetDatabase();
+    //     var cacheKey = "stats:threats";
 
-        // Severity distribution
-        var severityDist = await _dbContext.ThreatScores
-            .AsNoTracking()
-            .GroupBy(t => t.Severity)
-            .Select(g => new { severity = g.Key, count = g.Count() })
-            .OrderByDescending(x => x.count)
-            .ToListAsync(ct);
+    //     // Try cache first
+    //     var cached = await db.StringGetAsync(cacheKey);
+    //     if (cached.HasValue)
+    //     {
+    //         _logger.LogInformation("Threat stats cache hit");
+    //         return Ok(JsonSerializer.Deserialize<object>(cached.ToString()));
+    //     }
 
-        // Score ranges
-        var scoreRanges = new[]
-        {
-            new { range = "0-20 (Minimal)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score < 20, ct) },
-            new { range = "20-40 (Low)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 20 && t.Score < 40, ct) },
-            new { range = "40-60 (Medium)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 40 && t.Score < 60, ct) },
-            new { range = "60-80 (High)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 60 && t.Score < 80, ct) },
-            new { range = "80-100 (Critical)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 80, ct) }
-        };
+    //     // Severity distribution
+    //     var severityDist = await _dbContext.ThreatScores
+    //         .AsNoTracking()
+    //         .GroupBy(t => t.Severity)
+    //         .Select(g => new { severity = g.Key, count = g.Count() })
+    //         .OrderByDescending(x => x.count)
+    //         .ToListAsync(ct);
 
-        // Top MITRE tactics (parse comma-separated tactics)
-        var allMappings = await _dbContext.MitreAttackMappings
-            .AsNoTracking()
-            .Select(m => m.Tactics)
-            .ToListAsync(ct);
+    //     // Score ranges
+    //     var scoreRanges = new[]
+    //     {
+    //         new { range = "0-20 (Minimal)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score < 20, ct) },
+    //         new { range = "20-40 (Low)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 20 && t.Score < 40, ct) },
+    //         new { range = "40-60 (Medium)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 40 && t.Score < 60, ct) },
+    //         new { range = "60-80 (High)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 60 && t.Score < 80, ct) },
+    //         new { range = "80-100 (Critical)", count = await _dbContext.ThreatScores.CountAsync(t => t.Score >= 80, ct) }
+    //     };
 
-        var tacticCounts = allMappings
-            .SelectMany(t => t.Split(',', StringSplitOptions.RemoveEmptyEntries))
-            .GroupBy(t => t.Trim())
-            .Select(g => new { tactic = g.Key, count = g.Count() })
-            .OrderByDescending(t => t.count)
-            .Take(10)
-            .ToList();
+    //     // Top MITRE tactics (parse comma-separated tactics)
+    //     var allMappings = await _dbContext.MitreAttackMappings
+    //         .AsNoTracking()
+    //         .Select(m => m.Tactics)
+    //         .ToListAsync(ct);
 
-        // High-risk countries (from exposures with high threat scores)
-        var highRiskCountries = await _dbContext.CurrentExposures
-            .AsNoTracking()
-            .Join(_dbContext.ThreatScores.Where(t => t.Score >= 60),
-                e => e.Id,
-                t => t.ExposureId,
-                (e, t) => new { e.Country, t.Score })
-            .Where(x => !string.IsNullOrEmpty(x.Country))
-            .GroupBy(x => x.Country)
-            .Select(g => new
-            {
-                country = g.Key,
-                highRiskCount = g.Count(),
-                avgScore = g.Average(x => x.Score)
-            })
-            .OrderByDescending(c => c.highRiskCount)
-            .Take(10)
-            .ToListAsync(ct);
+    //     var tacticCounts = allMappings
+    //         .SelectMany(t => t.Split(',', StringSplitOptions.RemoveEmptyEntries))
+    //         .GroupBy(t => t.Trim())
+    //         .Select(g => new { tactic = g.Key, count = g.Count() })
+    //         .OrderByDescending(t => t.count)
+    //         .Take(10)
+    //         .ToList();
 
-        // Top CVEs in high-risk exposures
-        var topCves = await _dbContext.CveFindings
-            .AsNoTracking()
-            .Join(_dbContext.ThreatScores.Where(t => t.Score >= 60),
-                c => c.ExposureId,
-                t => t.ExposureId,
-                (c, t) => c)
-            .GroupBy(c => c.CveId)
-            .Select(g => new
-            {
-                cveId = g.Key,
-                count = g.Count(),
-                maxSeverity = g.Max(c => c.BaseScore)
-            })
-            .OrderByDescending(c => c.count)
-            .Take(10)
-            .ToListAsync(ct);
+    //     // High-risk countries (from exposures with high threat scores)
+    //     var highRiskCountries = await _dbContext.CurrentExposures
+    //         .AsNoTracking()
+    //         .Join(_dbContext.ThreatScores.Where(t => t.Score >= 60),
+    //             e => e.Id,
+    //             t => t.ExposureId,
+    //             (e, t) => new { e.Country, t.Score })
+    //         .Where(x => !string.IsNullOrEmpty(x.Country))
+    //         .GroupBy(x => x.Country)
+    //         .Select(g => new
+    //         {
+    //             country = g.Key,
+    //             highRiskCount = g.Count(),
+    //             avgScore = g.Average(x => x.Score)
+    //         })
+    //         .OrderByDescending(c => c.highRiskCount)
+    //         .Take(10)
+    //         .ToListAsync(ct);
 
-        var stats = new
-        {
-            totalScored = await _dbContext.ThreatScores.CountAsync(ct),
-            avgScore = await _dbContext.ThreatScores.AverageAsync(t => t.Score, ct),
-            generatedAt = DateTime.UtcNow,
-            severityDistribution = severityDist,
-            scoreRanges = scoreRanges,
-            topMitreTactics = tacticCounts,
-            highRiskCountries = highRiskCountries,
-            topCves = topCves
-        };
+    //     // Top CVEs in high-risk exposures
+    //     var topCves = await _dbContext.CveFindings
+    //         .AsNoTracking()
+    //         .Join(_dbContext.ThreatScores.Where(t => t.Score >= 60),
+    //             c => c.ExposureId,
+    //             t => t.ExposureId,
+    //             (c, t) => c)
+    //         .GroupBy(c => c.CveId)
+    //         .Select(g => new
+    //         {
+    //             cveId = g.Key,
+    //             count = g.Count(),
+    //             maxSeverity = g.Max(c => c.BaseScore)
+    //         })
+    //         .OrderByDescending(c => c.count)
+    //         .Take(10)
+    //         .ToListAsync(ct);
 
-        // Cache for 5 minutes
-        await db.StringSetAsync(cacheKey, JsonSerializer.Serialize(stats), TimeSpan.FromMinutes(5));
+    //     var stats = new
+    //     {
+    //         totalScored = await _dbContext.ThreatScores.CountAsync(ct),
+    //         avgScore = await _dbContext.ThreatScores.AverageAsync(t => t.Score, ct),
+    //         generatedAt = DateTime.UtcNow,
+    //         severityDistribution = severityDist,
+    //         scoreRanges = scoreRanges,
+    //         topMitreTactics = tacticCounts,
+    //         highRiskCountries = highRiskCountries,
+    //         topCves = topCves
+    //     };
 
-        return Ok(stats);
-    }
+    //     // Cache for 5 minutes
+    //     await db.StringSetAsync(cacheKey, JsonSerializer.Serialize(stats), TimeSpan.FromMinutes(5));
+
+    //     return Ok(stats);
+    // }
 
     public async Task<IActionResult> GetSubnetStats(string cidr, CancellationToken ct)
     {
